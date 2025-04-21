@@ -1,121 +1,163 @@
-# Numira
 # Numira - AI-Powered Mental Clarity App
 
-Numira is a full-stack web application designed to help users process their thoughts and emotions through AI-assisted journaling and reflection.
-
+Numira is a full-stack web and mobile application designed to help users process their thoughts and emotions through AI-guided conversations. The app provides a safe, supportive environment for reflection and personal growth.
 
 ## Features
 
-
-- **User Authentication**: Secure signup and login functionality
-
-- **Multiple AI Personas**: Choose between different AI personalities (nurturing "Ayla" and direct "Cam")
-
+- **User Authentication**: Secure signup and login system
+- **Persona Selection**: Choose between different AI personalities to match your preferred style of reflection
+  - **Ayla**: A nurturing and empathetic guide who helps you explore your thoughts with compassion
+  - **Cam**: A direct and insightful coach who helps you gain clarity through straightforward questions
 - **Conversation Interface**: Intuitive chat interface for journaling and reflection
-
-- **Insights Generation**: AI-generated insights from your conversations
-
-- **User Profiles**: Manage your account and view conversation history
-
-- **Responsive Design**: Works on desktop and mobile devices
-
-- **Offline Support**: Continue using the app even without an internet connection
-
-- **Dark Mode**: Toggle between light and dark themes
-
-- **Content Moderation**: Ensures all AI responses are safe and appropriate
-
+- **Insights Generation**: AI-powered analysis of conversations to identify patterns and key takeaways
+- **User Preferences**: Customize your experience with theme selection and default persona settings
+- **Responsive Design**: Works seamlessly across desktop and mobile devices
+- **Mobile App Support**: Native mobile app experience via CapacitorJS
+- **Offline Functionality**: Continue using the app even without an internet connection
+- **Touch-Optimized UI**: Designed for comfortable mobile interaction
 
 ## Tech Stack
 
-
 ### Backend
-
 - Node.js
-
-- Express
-
-- MongoDB
-
+- Express.js
+- MongoDB with Mongoose
 - JWT Authentication
-
-- OpenAI/Claude API Integration
-
+- OpenAI API Integration
 
 ### Frontend
-
 - React
-
-- Material-UI
-
 - React Router
-
+- Material UI
+- Axios
 - Context API for state management
+- Service Workers for offline capabilities
 
-- Progressive Web App (PWA) capabilities
-
+### Mobile
+- CapacitorJS for native mobile app conversion
+- Native device storage for offline data
+- Touch-optimized UI components
+- Splash screen and status bar integration
 
 ## Project Structure
-
 
 ```
 numira/
 ├── client/                 # Frontend React application
 │   ├── public/             # Static files
+│   ├── android/            # Android platform (after capacitor add)
+│   ├── ios/                # iOS platform (after capacitor add)
 │   └── src/                # React source code
 │       ├── components/     # Reusable UI components
-│       ├── context/        # React Context providers
+│       ├── context/        # Context providers for state management
 │       ├── pages/          # Page components
-│       ├── theme/          # Theme configuration
 │       └── utils/          # Utility functions
 ├── config/                 # Configuration files
 ├── middleware/             # Express middleware
 ├── models/                 # Mongoose models
 ├── routes/                 # API routes
 │   └── api/                # API endpoints
+├── scripts/                # Utility scripts
 ├── services/               # Service modules
-│   ├── aiService.js        # AI integration service
-│   └── moderationService.js # Content moderation service
-└── utils/                  # Utility functions
-    └── logger.js           # Logging utility
+├── .env                    # Environment variables
+├── package.json            # Project dependencies
+├── server.js               # Express server entry point
+└── MOBILE_DEPLOYMENT_GUIDE.md # Guide for mobile deployment
 ```
-
 
 ## Getting Started
 
+### Prerequisites
+- Node.js (v14 or higher)
+- MongoDB
+- OpenAI API key
+- For mobile development:
+  - Android Studio (for Android)
+  - Xcode (for iOS, macOS only)
+
+### Installation
 
 1. Clone the repository
+```
+git clone https://github.com/yourusername/numira.git
+cd numira
+```
 
-2. Install dependencies:
+2. Install server dependencies
+```
+npm install
+```
 
-   ```
-   npm install
-   cd client
-   npm install
-   ```
+3. Install client dependencies
+```
+cd client
+npm install
+cd ..
+```
 
-3. Create a `.env` file in the root directory with the following variables:
+4. Create a `.env` file in the root directory with the following variables:
+```
+NODE_ENV=development
+PORT=5000
+MONGO_URI=your_mongodb_connection_string
+JWT_SECRET=your_jwt_secret
+OPENAI_API_KEY=your_openai_api_key
+```
 
-   ```
-   MONGO_URI=your_mongodb_connection_string
-   JWT_SECRET=your_jwt_secret
-   OPENAI_API_KEY=your_openai_api_key
-   ```
+5. Seed the database with initial data (personas)
+```
+node scripts/seedDatabase.js
+```
 
-4. Run the development server:
+6. Run the development server
+```
+npm run dev
+```
 
-   ```
-   npm run dev:full
-   ```
+This will start both the backend server and the React frontend in development mode.
 
+## Deployment
 
-## Mobile Deployment
+### Web Deployment
+The application is designed to be deployable to Replit and can connect to external APIs via Make.com if needed.
 
+### Mobile Deployment
+For deploying as a native mobile application:
 
-The app can be deployed as a native mobile application using Capacitor. See `MOBILE_DEPLOYMENT_GUIDE.md` for detailed instructions.
+1. Build the React application
+```
+cd client
+npm run build
+```
 
+2. Initialize Capacitor and add platforms
+```
+npm run cap:init
+npm run cap:add:android  # For Android
+npm run cap:add:ios      # For iOS (macOS only)
+```
+
+3. Sync the web code with the native projects
+```
+npm run cap:sync
+```
+
+4. Open the native projects
+```
+npm run cap:open:android  # For Android
+npm run cap:open:ios      # For iOS (macOS only)
+```
+
+For detailed instructions on building and submitting to app stores, see the [Mobile Deployment Guide](MOBILE_DEPLOYMENT_GUIDE.md).
+
+## Offline Functionality
+
+The mobile app includes offline capabilities:
+- Conversations are cached locally for offline viewing
+- Users can compose messages while offline
+- Data automatically syncs when the device reconnects
+- Service workers cache static assets for faster loading
 
 ## License
 
-
-MIT
+This project is licensed under the MIT License - see the LICENSE file for details.
