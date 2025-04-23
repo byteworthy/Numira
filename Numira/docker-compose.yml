@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  # API Server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: numira-api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-3000}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-numira}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - TRUST_PROXY=true
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+    command: >
+      sh -c "./scripts/wait-for-it.sh postgres:5432 -t 60 && 
+             ./scripts/wait-for-it.sh redis:6379 -t 30 && 
+             node server.js"
+    networks:
+      - numira-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: numira-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-numira}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - numira-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis for caching and queues
+  redis:
+    image: redis:7-alpine
+    container_name: numira-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - numira-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Adminer for database management (optional, development only)
+  adminer:
+    image: adminer
+    container_name: numira-adminer
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+    networks:
+      - numira-network
+    profiles:
+      - dev
+
+  # Redis Commander for Redis management (optional, development only)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: numira-redis-commander
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:${REDIS_PASSWORD:-}
+    networks:
+      - numira-network
+    profiles:
+      - dev
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  numira-network:
+    driver: bridge

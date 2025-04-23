@@ -1,0 +1,86 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Authentication fields
+  passwordHash  String?
+  salt          String?
+  
+  // Disclaimer acceptance
+  disclaimerAccepted    Boolean  @default(false)
+  disclaimerAcceptedAt  DateTime?
+  disclaimerVersion     String?
+  
+  // User data
+  journals      Journal[]
+  
+  @@map("users")
+}
+
+model Journal {
+  id          String   @id @default(cuid())
+  userId      String
+  personaId   String
+  roomId      String
+  prompt      String   @db.Text
+  response    String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@map("journals")
+}
+
+model Persona {
+  id           String   @id
+  name         String
+  tone         String
+  voice        String
+  description  String   @db.Text
+  systemPrompt String   @db.Text
+  defaultRooms String[] // Array of room IDs
+  tags         String[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("personas")
+}
+
+model Room {
+  id                String     @id
+  name              String
+  description       String     @db.Text
+  purpose           String     @db.Text
+  supportedPersonas String[]   // Array of persona IDs
+  samplePrompt      String
+  tags              String[]
+  promptType        PromptType
+  features          Json       // JSON object for features
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@map("rooms")
+}
+
+enum PromptType {
+  open
+  guided
+  short_form @map("short-form")
+  targeted
+}

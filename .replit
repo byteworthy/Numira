@@ -1,0 +1,13 @@
+entrypoint = "server.js"
+modules = ["nodejs-18:v1", "postgresql-16"]
+
+[nix]
+channel = "stable-23_11"
+
+[deployment]
+run = ["node", "server.js"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
