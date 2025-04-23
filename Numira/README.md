@@ -20,6 +20,7 @@ Numira is a full-stack web and mobile application designed to help users process
 - [Payment Integration](docs/PAYMENT_INTEGRATION.md) - Stripe and RevenueCat integration
 - [Family Plan](docs/FAMILY_PLAN.md) - Family plan implementation
 - [Platform Scale](docs/PLATFORM_SCALE.md) - Scaling considerations
+- [Prisma Replit Setup](docs/PRISMA_REPLIT_SETUP.md) - Fixing OpenSSL issues with Prisma in Replit
 
 ## 🚀 Quick Start
 
@@ -298,7 +299,9 @@ If you encounter any of these issues during installation:
 
 4. **Directory navigation issues**: The setup script now automatically detects whether it's being run from the Numira directory or its parent directory and adjusts accordingly.
 
-5. **YAML syntax errors in workflow files**: If you encounter YAML syntax errors in files like mobile-build.yml, ensure that the file has proper indentation and structure. YAML is sensitive to whitespace and requires consistent indentation.
+5. **Prisma OpenSSL errors in Replit**: If you encounter errors like `Unable to require libquery_engine-debian-openssl-1.1.x.so.node` or `Prisma cannot find the required libssl system library`, see our [Prisma Replit Setup](docs/PRISMA_REPLIT_SETUP.md) guide. We've updated the setup script to automatically install OpenSSL 1.1.x and configured Prisma to use compatible binary targets.
+
+6. **YAML syntax errors in workflow files**: If you encounter YAML syntax errors in files like mobile-build.yml, ensure that the file has proper indentation and structure. YAML is sensitive to whitespace and requires consistent indentation.
 
 ## Available Scripts
 

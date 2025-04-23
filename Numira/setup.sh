@@ -50,7 +50,22 @@ else
   echo "✅ Dependencies installed successfully."
 fi
 
-# Step 3: Set up the database
+# Step 3: Install OpenSSL 1.1 for Prisma
+echo "📦 Installing OpenSSL 1.1 for Prisma..."
+# For Replit environment
+if command -v replit-install &> /dev/null; then
+  replit-install openssl1.1
+elif command -v apt-get &> /dev/null; then
+  # For Debian/Ubuntu environments
+  apt-get update && apt-get install -y openssl libssl1.1
+elif command -v nix-env &> /dev/null; then
+  # For Nix environments
+  nix-env -i openssl_1_1
+else
+  echo "⚠️ Could not install OpenSSL 1.1. Attempting to continue anyway..."
+fi
+
+# Step 4: Set up the database
 echo "🗄️ Setting up the database..."
 node scripts/setup-database.js
 if [ $? -ne 0 ]; then
