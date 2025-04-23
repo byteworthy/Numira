@@ -286,11 +286,19 @@ This will start both the backend server and the React frontend in development mo
 
 If you encounter any of these issues during installation:
 
-1. **Anthropic package version error**: We've updated the package.json to use a compatible version of the Anthropic package.
+1. **Anthropic package version error**: We've updated the package.json to use version 0.3.0 of the Anthropic package, which is compatible with npm. If you still encounter issues, you can try removing the anthropic dependency if you're not using it directly:
+   ```bash
+   # Edit package.json and remove the anthropic line, or run:
+   npm uninstall anthropic
+   ```
 
 2. **Prisma migration issues**: The `setup-database.js` script handles creating a baseline migration for existing databases.
 
 3. **Missing @prisma/client module**: The setup script ensures the Prisma client is generated before running the seed script.
+
+4. **Directory navigation issues**: The setup script now automatically detects whether it's being run from the Numira directory or its parent directory and adjusts accordingly.
+
+5. **YAML syntax errors in workflow files**: If you encounter YAML syntax errors in files like mobile-build.yml, ensure that the file has proper indentation and structure. YAML is sensitive to whitespace and requires consistent indentation.
 
 ## Available Scripts
 

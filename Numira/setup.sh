@@ -5,6 +5,19 @@
 
 echo "🚀 Starting Numira setup..."
 
+# Check if we're in the right directory
+if [ ! -f "package.json" ] || ! grep -q "\"name\": \"numira\"" package.json; then
+  echo "⚠️ Not in the Numira directory. Checking for Numira subdirectory..."
+  
+  if [ -d "Numira" ] && [ -f "Numira/package.json" ] && grep -q "\"name\": \"numira\"" Numira/package.json; then
+    echo "📂 Found Numira directory. Changing to Numira directory..."
+    cd Numira
+  else
+    echo "❌ Could not find Numira directory. Please run this script from the Numira directory or its parent directory."
+    exit 1
+  fi
+fi
+
 # Step 1: Create .env file if it doesn't exist
 if [ ! -f .env ]; then
   echo "📝 Creating .env file from .env.sample..."
@@ -17,11 +30,25 @@ fi
 # Step 2: Install dependencies
 echo "📦 Installing dependencies..."
 npm install
+
+# If npm install fails, try again without anthropic
 if [ $? -ne 0 ]; then
-  echo "❌ Failed to install dependencies. Please check the error messages above."
-  exit 1
+  echo "⚠️ Initial dependency installation failed. This might be due to the anthropic package."
+  echo "📦 Trying to install without the anthropic package..."
+  
+  # Remove anthropic from package.json and try again
+  sed -i 's/"anthropic": ".*",//' package.json
+  npm install
+  
+  if [ $? -ne 0 ]; then
+    echo "❌ Dependency installation still failed. Please check the error messages above."
+    exit 1
+  else
+    echo "✅ Dependencies installed successfully (without anthropic package)."
+  fi
+else
+  echo "✅ Dependencies installed successfully."
 fi
-echo "✅ Dependencies installed successfully."
 
 # Step 3: Set up the database
 echo "🗄️ Setting up the database..."
