@@ -82,6 +82,7 @@
     "pg": "^8.11.0",
     "postmark": "^3.0.18",
     "prom-client": "^14.2.0",
+    "rate-limit-redis": "^3.0.1",
     "redis": "^4.6.6",
     "stripe": "^12.5.0",
     "swagger-jsdoc": "^6.2.8",
