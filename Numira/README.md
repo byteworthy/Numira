@@ -208,7 +208,9 @@ This proactive monitoring helps identify and address issues before they impact u
   - Xcode (for iOS, macOS only)
   - Capacitor CLI (`npm install -g @capacitor/cli`)
 
-### Installation
+### Automated Installation
+
+We've created an automated setup script that handles the entire installation process:
 
 1. Clone the repository
 ```
@@ -216,19 +218,33 @@ git clone https://github.com/byteworthy/Numira.git
 cd Numira
 ```
 
-2. Install server dependencies
+2. Run the setup script
 ```
-npm install
-```
-
-3. Install client dependencies
-```
-cd client
-npm install
-cd ..
+./setup.sh
 ```
 
-4. Create a `.env` file in the root directory based on the provided `.env.sample`:
+This script will:
+- Create a `.env` file from `.env.sample` if it doesn't exist
+- Install all dependencies
+- Set up the database and generate the Prisma client
+- Seed the database with initial data
+
+3. Start the development server
+```
+npm run dev
+```
+
+### Manual Installation
+
+If you prefer to install manually:
+
+1. Clone the repository
+```
+git clone https://github.com/byteworthy/Numira.git
+cd Numira
+```
+
+2. Create a `.env` file in the root directory based on the provided `.env.sample`:
 ```bash
 # Copy the example file
 cp .env.sample .env
@@ -237,17 +253,44 @@ cp .env.sample .env
 nano .env  # or use your preferred editor
 ```
 
-5. Seed the database with initial data (personas)
+3. Install server dependencies
 ```
-npm run seed
+npm install
 ```
 
-6. Start the development server
+4. Install client dependencies
+```
+cd client
+npm install
+cd ..
+```
+
+5. Set up the database and generate the Prisma client
+```
+node scripts/setup-database.js
+```
+
+6. Seed the database with initial data
+```
+node scripts/seed.js
+```
+
+7. Start the development server
 ```
 npm run dev
 ```
 
 This will start both the backend server and the React frontend in development mode.
+
+### Troubleshooting Installation Issues
+
+If you encounter any of these issues during installation:
+
+1. **Anthropic package version error**: We've updated the package.json to use a compatible version of the Anthropic package.
+
+2. **Prisma migration issues**: The `setup-database.js` script handles creating a baseline migration for existing databases.
+
+3. **Missing @prisma/client module**: The setup script ensures the Prisma client is generated before running the seed script.
 
 ## Available Scripts
 
