@@ -32,9 +32,11 @@ const config = {
   
   // Database configuration
   database: {
-    url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/numira',
-    ssl: process.env.DATABASE_SSL === 'true',
-    maxConnections: parseInt(process.env.DATABASE_MAX_CONNECTIONS || '10', 10),
+    url: process.env.DATABASE_URL || 'file:./prisma/dev.db',
+    type: 'sqlite',
+    // SQLite doesn't use these PostgreSQL-specific options
+    ssl: false,
+    maxConnections: 1, // SQLite supports only one connection
     idleTimeoutMillis: parseInt(process.env.DATABASE_IDLE_TIMEOUT || '30000', 10)
   },
   

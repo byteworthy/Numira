@@ -1,6 +1,6 @@
 # Prisma Setup for Replit Environment
 
-This document explains how to set up Prisma to work correctly in the Replit environment, addressing common issues with OpenSSL dependencies.
+This document explains how to set up Prisma to work correctly in the Replit environment, addressing common issues with system dependencies.
 
 ## Problem
 
@@ -13,69 +13,99 @@ Prisma cannot find the required `libssl` system library in your system. Please i
 Details: libssl.so.1.1: cannot open shared object file: No such file or directory
 ```
 
-This occurs because Prisma's query engine requires OpenSSL 1.1.x, which is not installed by default in the Replit environment.
+This occurs because Prisma's query engine requires OpenSSL 1.1.x, which is not installed by default in the Replit environment. Additionally, Replit doesn't allow direct installation of system packages through shell commands:
+
+```
+Tools like apt, brew, and yum which modify system dependencies are not
+directly callable inside Replit. We offer the System Dependencies
+pane for easy dependency management.
+```
 
 ## Solution
 
-We've implemented two changes to address this issue:
+We've implemented a different approach to solve this issue by using SQLite instead of PostgreSQL for the Replit environment:
 
-### 1. Install OpenSSL 1.1.x in the setup script
+### 1. Use SQLite as the database provider
 
-The `setup.sh` script has been modified to install OpenSSL 1.1.x before running Prisma operations:
-
-```bash
-# Install OpenSSL 1.1 for Prisma
-echo "📦 Installing OpenSSL 1.1 for Prisma..."
-# For Replit environment
-if command -v replit-install &> /dev/null; then
-  replit-install openssl1.1
-elif command -v apt-get &> /dev/null; then
-  # For Debian/Ubuntu environments
-  apt-get update && apt-get install -y openssl libssl1.1
-elif command -v nix-env &> /dev/null; then
-  # For Nix environments
-  nix-env -i openssl_1_1
-else
-  echo "⚠️ Could not install OpenSSL 1.1. Attempting to continue anyway..."
-fi
-```
-
-This script attempts to install OpenSSL 1.1.x using different package managers depending on the environment.
-
-### 2. Specify binary targets in the Prisma schema
-
-The `prisma/schema.prisma` file has been updated to specify binary targets that include the required OpenSSL versions:
+The `prisma/schema.prisma` file has been updated to use SQLite instead of PostgreSQL:
 
 ```prisma
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-1.1.x", "linux-musl-openssl-3.0.x"]
+  engineType    = "binary"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 ```
 
-This ensures that Prisma generates binaries compatible with different OpenSSL versions, increasing the chances of finding a compatible binary for the environment.
+SQLite is a file-based database that doesn't require additional system dependencies, making it ideal for environments like Replit where installing system packages is restricted.
 
-## Troubleshooting
+### 2. Update database configuration
 
-If you still encounter issues with Prisma in the Replit environment:
+The `config/config.js` file has been updated to use SQLite:
 
-1. Check if OpenSSL 1.1.x is installed:
-   ```bash
-   ldconfig -p | grep libssl
-   ```
+```javascript
+// Database configuration
+database: {
+  url: process.env.DATABASE_URL || 'file:./prisma/dev.db',
+  type: 'sqlite',
+  // SQLite doesn't use these PostgreSQL-specific options
+  ssl: false,
+  maxConnections: 1, // SQLite supports only one connection
+  idleTimeoutMillis: parseInt(process.env.DATABASE_IDLE_TIMEOUT || '30000', 10)
+},
+```
 
-2. Try manually installing OpenSSL 1.1.x:
-   ```bash
-   # For Replit
-   replit-install openssl1.1
-   
-   # For Debian/Ubuntu
-   apt-get update && apt-get install -y openssl libssl1.1
-   ```
+### 3. Ensure proper directory structure
 
-3. Consider using a different database provider or ORM if the issue persists.
+The `setup.sh` script has been modified to ensure the prisma directory exists with proper permissions:
+
+```bash
+# Ensure prisma directory exists with proper permissions
+echo "🗂️ Ensuring prisma directory exists..."
+mkdir -p prisma
+chmod -R 755 prisma
+```
+
+### 4. Update database setup script
+
+The `scripts/setup-database.js` script has been updated to handle SQLite database creation:
+
+```javascript
+// Create SQLite database file if it doesn't exist
+const dbFilePath = path.join(__dirname, '../prisma/dev.db');
+if (!fs.existsSync(dbFilePath)) {
+  console.log('🗄️ Creating SQLite database file...');
+  try {
+    // Push the schema to create the database
+    execSync('npx prisma db push', {
+      stdio: 'inherit'
+    });
+  } catch (error) {
+    console.log('⚠️ Could not create SQLite database file. Continuing anyway...');
+  }
+}
+```
+
+## Benefits of this Approach
+
+1. **No system dependencies**: SQLite doesn't require additional system libraries like OpenSSL
+2. **Simplified setup**: File-based database is easier to set up in restricted environments
+3. **Portability**: SQLite database file can be easily backed up and restored
+4. **Performance**: For development and testing purposes, SQLite provides adequate performance
+
+## Limitations
+
+1. **Not suitable for production**: This SQLite setup is intended for development and testing in Replit only
+2. **Limited concurrency**: SQLite has limited support for concurrent connections
+3. **Feature differences**: Some PostgreSQL-specific features may not be available in SQLite
 
 ## References
 
+- [Prisma Documentation on SQLite](https://www.prisma.io/docs/concepts/database-connectors/sqlite)
 - [Prisma Documentation on Binary Targets](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#binarytargets)
-- [Prisma GitHub Issue on OpenSSL Compatibility](https://github.com/prisma/prisma/issues/10649)
+- [Replit Documentation on System Dependencies](https://docs.replit.com/replit-workspace/dependency-management)
