@@ -7,6 +7,11 @@
 
 require('dotenv').config();
 
+// Parse CORS origins from environment variable or use default
+const corsOrigins = process.env.CORS_ORIGINS 
+  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+  : ['http://localhost:3000', 'http://localhost:3001', 'https://numira.app'];
+
 // Default configuration values
 const config = {
   server: {
