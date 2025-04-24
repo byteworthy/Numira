@@ -1,38 +1,23 @@
 /**
- * LLM Provider Service
+ * LLM Provider Service using Anthropic Claude
  * 
- * A unified service for interacting with various LLM providers (OpenAI, Anthropic, etc.)
- * with optimized handling, fallback mechanisms, and performance monitoring.
+ * A service for interacting with Anthropic's Claude AI models through the Anthropic API.
+ * This service provides a unified interface for sending prompts to Claude and handling responses,
+ * with features like caching, circuit breaking, and error handling.
  * 
- * Features:
- * - Multi-provider support with dynamic fallback
- * - Streaming support for real-time responses
- * - Automatic retries with exponential backoff
- * - Circuit breaker pattern to prevent cascading failures
- * - Token usage tracking and optimization
- * - Dynamic model selection based on input complexity
+ * @module llmProviderService
  */
 
-const { OpenAI } = require('openai');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const winston = require('winston');
 const config = require('../config/config');
 const cacheService = require('./cacheService');
 const circuitBreaker = require('./circuitBreaker');
 
-// Initialize LLM clients
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: config.ai.openai.timeout,
+// Initialize Anthropic client
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
-
-// Initialize Anthropic client if API key is available
-let anthropic = null;
-if (process.env.ANTHROPIC_API_KEY) {
-  anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
-}
 
 // Configure logger
 const logger = winston.createLogger({
@@ -52,31 +37,6 @@ const logger = winston.createLogger({
  * Provider configurations with models and their capabilities
  */
 const providers = {
-  openai: {
-    name: 'OpenAI',
-    available: !!process.env.OPENAI_API_KEY,
-    models: {
-      'gpt-4': {
-        contextWindow: 8192,
-        costPer1kTokens: 0.03,
-        priority: 1,
-        capabilities: ['high-reasoning', 'complex-instructions', 'nuanced-response']
-      },
-      'gpt-4-turbo': {
-        contextWindow: 128000,
-        costPer1kTokens: 0.01,
-        priority: 2,
-        capabilities: ['high-reasoning', 'complex-instructions', 'nuanced-response', 'large-context']
-      },
-      'gpt-3.5-turbo': {
-        contextWindow: 16385,
-        costPer1kTokens: 0.0015,
-        priority: 3,
-        capabilities: ['basic-reasoning', 'standard-instructions']
-      }
-    },
-    defaultModel: 'gpt-4'
-  },
   anthropic: {
     name: 'Anthropic',
     available: !!process.env.ANTHROPIC_API_KEY,
@@ -124,7 +84,6 @@ const breakerConfig = {
 
 // Initialize circuit breakers for each provider
 const breakers = {
-  openai: circuitBreaker.createBreaker('openai', breakerConfig),
   anthropic: circuitBreaker.createBreaker('anthropic', breakerConfig)
 };
 
@@ -146,22 +105,20 @@ function estimateTokenCount(text) {
  * 
  * @param {string} systemPrompt - The system prompt
  * @param {string} userInput - The user input
- * @param {string} preferredProvider - Optional preferred provider
  * @param {string} preferredModel - Optional preferred model
- * @returns {Object} - Selected provider and model
+ * @returns {Object} - Selected model
  */
-function selectModel(systemPrompt, userInput, preferredProvider = null, preferredModel = null) {
+function selectModel(systemPrompt, userInput, preferredModel = null) {
   // Estimate total tokens
   const totalTokens = estimateTokenCount(systemPrompt) + estimateTokenCount(userInput);
   
-  // Check if a specific provider and model are requested and available
-  if (preferredProvider && preferredModel) {
-    const provider = providers[preferredProvider];
+  // Check if a specific model is requested and available
+  if (preferredModel) {
+    const provider = providers.anthropic;
     if (provider && provider.available && provider.models[preferredModel]) {
       // Check if the model can handle the token count
       if (totalTokens <= provider.models[preferredModel].contextWindow) {
         return {
-          provider: preferredProvider,
           model: preferredModel
         };
       }
@@ -171,68 +128,49 @@ function selectModel(systemPrompt, userInput, preferredProvider = null, preferre
   // Determine input complexity based on length and characteristics
   const complexity = calculateComplexity(userInput);
   
-  // Get available providers
-  const availableProviders = Object.entries(providers)
-    .filter(([_, provider]) => provider.available)
-    .map(([key, _]) => key);
-  
-  if (availableProviders.length === 0) {
-    throw new Error('No LLM providers are available');
+  // Check if Anthropic is available
+  if (!providers.anthropic.available) {
+    throw new Error('Anthropic provider is not available');
   }
   
   // Filter out providers with open circuit breakers
-  const healthyProviders = availableProviders.filter(provider => 
-    !breakers[provider].isOpen()
-  );
+  const isHealthy = !breakers.anthropic.isOpen();
   
-  // If all circuits are open, use the first available provider anyway
-  // (circuit breaker will allow a test request)
-  const candidateProviders = healthyProviders.length > 0 ? 
-    healthyProviders : [availableProviders[0]];
-  
-  // For each candidate provider, find the best model based on complexity and token count
-  let bestProvider = null;
-  let bestModel = null;
-  let bestPriority = Infinity;
-  
-  for (const providerKey of candidateProviders) {
-    const provider = providers[providerKey];
-    
-    // Find models that can handle the token count and complexity
-    const suitableModels = Object.entries(provider.models)
-      .filter(([_, model]) => totalTokens <= model.contextWindow)
-      .filter(([_, model]) => isModelSuitableForComplexity(model, complexity));
-    
-    if (suitableModels.length > 0) {
-      // Find the highest priority (lowest number) model
-      const [modelName, model] = suitableModels.reduce((best, current) => {
-        return current[1].priority < best[1].priority ? current : best;
-      }, suitableModels[0]);
-      
-      if (model.priority < bestPriority) {
-        bestProvider = providerKey;
-        bestModel = modelName;
-        bestPriority = model.priority;
-      }
-    }
+  // If circuit is open, allow a test request
+  if (!isHealthy) {
+    logger.warn('Anthropic circuit breaker is open, allowing test request');
   }
   
-  // If no suitable model found, use the default model of the first available provider
-  if (!bestProvider || !bestModel) {
-    bestProvider = candidateProviders[0];
-    bestModel = providers[bestProvider].defaultModel;
+  // Find the best model based on complexity and token count
+  const provider = providers.anthropic;
+  
+  // Find models that can handle the token count and complexity
+  const suitableModels = Object.entries(provider.models)
+    .filter(([_, model]) => totalTokens <= model.contextWindow)
+    .filter(([_, model]) => isModelSuitableForComplexity(model, complexity));
+  
+  if (suitableModels.length > 0) {
+    // Find the highest priority (lowest number) model
+    const [modelName, _] = suitableModels.reduce((best, current) => {
+      return current[1].priority < best[1].priority ? current : best;
+    }, suitableModels[0]);
     
-    // Log that we're using a fallback model
-    logger.warn('No ideal model found for input, using default', {
-      provider: bestProvider,
-      model: bestModel,
-      estimatedTokens: totalTokens
-    });
+    return {
+      model: modelName
+    };
   }
+  
+  // If no suitable model found, use the default model
+  const defaultModel = providers.anthropic.defaultModel;
+  
+  // Log that we're using a fallback model
+  logger.warn('No ideal model found for input, using default', {
+    model: defaultModel,
+    estimatedTokens: totalTokens
+  });
   
   return {
-    provider: bestProvider,
-    model: bestModel
+    model: defaultModel
   };
 }
 
@@ -327,59 +265,6 @@ function isRetryableError(error) {
 }
 
 /**
- * Call OpenAI API with retry logic
- * 
- * @param {string} model - The model to use
- * @param {Array} messages - The messages array
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} - The API response
- */
-async function callOpenAIWithRetry(model, messages, options = {}) {
-  let attempt = 0;
-  let delay = retryConfig.initialDelayMs;
-  
-  while (attempt < retryConfig.maxRetries) {
-    try {
-      // Use circuit breaker to call OpenAI
-      return await breakers.openai.execute(async () => {
-        const response = await openai.chat.completions.create({
-          model,
-          messages,
-          temperature: options.temperature || config.ai.openai.temperature,
-          max_tokens: options.maxTokens || config.ai.openai.maxTokens,
-          stream: options.stream || false
-        });
-        
-        return response;
-      });
-    } catch (error) {
-      attempt++;
-      
-      // If it's the last attempt, throw the error
-      if (attempt >= retryConfig.maxRetries) {
-        throw error;
-      }
-      
-      // Check if the error is retryable
-      if (!isRetryableError(error)) {
-        throw error;
-      }
-      
-      // Log retry attempt
-      logger.warn(`OpenAI API call failed, retrying (${attempt}/${retryConfig.maxRetries})`, {
-        error: error.message,
-        model,
-        attempt
-      });
-      
-      // Wait before retrying with exponential backoff
-      await new Promise(resolve => setTimeout(resolve, delay));
-      delay = Math.min(delay * retryConfig.backoffFactor, retryConfig.maxDelayMs);
-    }
-  }
-}
-
-/**
  * Call Anthropic API with retry logic
  * 
  * @param {string} model - The model to use
@@ -438,47 +323,44 @@ async function callAnthropicWithRetry(model, systemPrompt, userInput, options = 
 }
 
 /**
- * Get AI response with automatic provider selection and fallback
+ * Get AI response from Anthropic
  * 
  * @param {Object} params - The parameters object
  * @param {string} params.systemPrompt - The system prompt
  * @param {string} params.userInput - The user input
- * @param {string} [params.preferredProvider] - Optional preferred provider
  * @param {string} [params.preferredModel] - Optional preferred model
  * @param {boolean} [params.stream=false] - Whether to stream the response
  * @returns {Promise<string>} - The AI response
  */
 async function getAIResponse(params) {
-  const { systemPrompt, userInput, preferredProvider, preferredModel, stream = false } = params;
+  const { systemPrompt, userInput, preferredModel, stream = false } = params;
   
   // Start timing for performance logging
   const startTime = Date.now();
   
   try {
     // Select the best model based on input complexity
-    const { provider, model } = selectModel(
+    const { model } = selectModel(
       systemPrompt,
       userInput,
-      preferredProvider,
       preferredModel
     );
     
     // Generate cache key for this request
-    const cacheKey = `llm:${provider}:${model}:${cacheService.generateCacheKey('prompt', {
+    const cacheKey = `llm:anthropic:${model}:${cacheService.generateCacheKey('prompt', {
       system: systemPrompt,
       user: userInput
     })}`;
     
     // Skip cache for streaming responses
     if (stream) {
-      return await generateResponse(provider, model, systemPrompt, userInput, { stream });
+      return await generateResponse(model, systemPrompt, userInput, { stream });
     }
     
     // Try to get from cache first
     const cachedResponse = await cacheService.get(cacheKey);
     if (cachedResponse) {
       logger.debug('Cache hit for AI response', {
-        provider,
         model,
         cacheKey
       });
@@ -488,12 +370,11 @@ async function getAIResponse(params) {
     
     // Generate response if not in cache
     logger.debug('Cache miss for AI response', {
-      provider,
       model,
       cacheKey
     });
     
-    const response = await generateResponse(provider, model, systemPrompt, userInput);
+    const response = await generateResponse(model, systemPrompt, userInput);
     
     // Cache the response
     const ttl = config.cache.aiResponseTtl || 86400; // Default 24 hours
@@ -502,7 +383,6 @@ async function getAIResponse(params) {
     // Calculate and log response time
     const responseTime = Date.now() - startTime;
     logger.info('AI response generated', {
-      provider,
       model,
       responseTime,
       estimatedTokens: estimateTokenCount(systemPrompt) + estimateTokenCount(userInput) + estimateTokenCount(response)
@@ -516,96 +396,28 @@ async function getAIResponse(params) {
       stack: error.stack
     });
     
-    // Try fallback if available
-    if (error.message.includes('OpenAI') && providers.anthropic.available) {
-      logger.info('Falling back to Anthropic');
-      return await fallbackToAnthropic(systemPrompt, userInput);
-    } else if (error.message.includes('Anthropic') && providers.openai.available) {
-      logger.info('Falling back to OpenAI');
-      return await fallbackToOpenAI(systemPrompt, userInput);
-    }
-    
     throw new Error(`AI service error: ${error.message}`);
   }
 }
 
 /**
- * Generate response based on provider
+ * Generate response using Anthropic
  * 
- * @param {string} provider - The provider to use
  * @param {string} model - The model to use
  * @param {string} systemPrompt - The system prompt
  * @param {string} userInput - The user input
  * @param {Object} options - Additional options
  * @returns {Promise<string>} - The AI response
  */
-async function generateResponse(provider, model, systemPrompt, userInput, options = {}) {
-  switch (provider) {
-    case 'openai':
-      const openaiResponse = await callOpenAIWithRetry(
-        model,
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userInput }
-        ],
-        options
-      );
-      
-      return options.stream ? openaiResponse : openaiResponse.choices[0].message.content;
-      
-    case 'anthropic':
-      const anthropicResponse = await callAnthropicWithRetry(
-        model,
-        systemPrompt,
-        userInput,
-        options
-      );
-      
-      return options.stream ? anthropicResponse : anthropicResponse.content[0].text;
-      
-    default:
-      throw new Error(`Unsupported provider: ${provider}`);
-  }
-}
-
-/**
- * Fallback to OpenAI when Anthropic fails
- * 
- * @param {string} systemPrompt - The system prompt
- * @param {string} userInput - The user input
- * @returns {Promise<string>} - The AI response
- */
-async function fallbackToOpenAI(systemPrompt, userInput) {
-  const model = providers.openai.defaultModel;
-  
-  const response = await callOpenAIWithRetry(
-    model,
-    [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userInput }
-    ]
-  );
-  
-  return response.choices[0].message.content;
-}
-
-/**
- * Fallback to Anthropic when OpenAI fails
- * 
- * @param {string} systemPrompt - The system prompt
- * @param {string} userInput - The user input
- * @returns {Promise<string>} - The AI response
- */
-async function fallbackToAnthropic(systemPrompt, userInput) {
-  const model = providers.anthropic.defaultModel;
-  
-  const response = await callAnthropicWithRetry(
+async function generateResponse(model, systemPrompt, userInput, options = {}) {
+  const anthropicResponse = await callAnthropicWithRetry(
     model,
     systemPrompt,
-    userInput
+    userInput,
+    options
   );
   
-  return response.content[0].text;
+  return options.stream ? anthropicResponse : anthropicResponse.content[0].text;
 }
 
 /**
@@ -616,21 +428,20 @@ async function fallbackToAnthropic(systemPrompt, userInput) {
 function getProviderStatus() {
   const status = {};
   
-  for (const [key, provider] of Object.entries(providers)) {
-    if (provider.available) {
-      status[key] = {
-        name: provider.name,
-        available: true,
-        circuitOpen: breakers[key].isOpen(),
-        models: Object.keys(provider.models),
-        defaultModel: provider.defaultModel
-      };
-    } else {
-      status[key] = {
-        name: provider.name,
-        available: false
-      };
-    }
+  const provider = providers.anthropic;
+  if (provider.available) {
+    status.anthropic = {
+      name: provider.name,
+      available: true,
+      circuitOpen: breakers.anthropic.isOpen(),
+      models: Object.keys(provider.models),
+      defaultModel: provider.defaultModel
+    };
+  } else {
+    status.anthropic = {
+      name: provider.name,
+      available: false
+    };
   }
   
   return status;
@@ -640,5 +451,6 @@ module.exports = {
   getAIResponse,
   getProviderStatus,
   estimateTokenCount,
-  selectModel
+  selectModel,
+  anthropic
 };
