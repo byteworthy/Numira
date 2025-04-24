@@ -11,8 +11,7 @@ router.get('/health', (req, res) => {
   logger.info('Conversations API health check');
   return res.status(200).json({ 
     status: 'ok', 
-    message: 'Conversations API is operational',
-    timestamp: new Date().toISOString() 
+    message: 'Conversations API healthy'
   });
 });
 
@@ -24,8 +23,8 @@ router.get('/health', (req, res) => {
 router.get('/', (req, res) => {
   logger.info('Conversations API placeholder endpoint accessed');
   return res.status(200).json({ 
-    message: 'Conversations API placeholder - functionality to be implemented',
-    timestamp: new Date().toISOString() 
+    data: [],
+    message: 'Conversations API placeholder - functionality to be implemented'
   });
 });
 
