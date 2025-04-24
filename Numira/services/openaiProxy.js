@@ -28,37 +28,16 @@ const configuration = new Configuration({
 const openai = new OpenAIApi(configuration);
 
 // Configure circuit breaker for OpenAI API
-const openaiBreaker = circuitBreaker.create('openai', {
+const openaiBreaker = circuitBreaker.createBreaker('openai', {
   failureThreshold: 3,
   resetTimeout: 30000, // 30 seconds
-  fallback: async (error, args) => {
-    logger.warn('OpenAI circuit breaker triggered fallback', { 
-      error: error.message,
-      model: args[0]?.model
-    });
-    
-    // If using GPT-4, fallback to GPT-3.5-turbo
-    if (args[0]?.model && args[0].model.includes('gpt-4')) {
-      logger.info('Falling back from GPT-4 to GPT-3.5-turbo');
-      
-      // Create a new request with GPT-3.5-turbo
-      const fallbackArgs = { ...args[0] };
-      fallbackArgs.model = 'gpt-3.5-turbo';
-      
-      // Try with the fallback model
-      try {
-        return await openaiProxy.createChatCompletion(fallbackArgs, args[1], true);
-      } catch (fallbackError) {
-        logger.error('Fallback to GPT-3.5-turbo also failed', { 
-          error: fallbackError.message 
-        });
-        throw fallbackError;
-      }
-    }
-    
-    // If already using GPT-3.5 or other model, just throw the error
-    throw error;
-  }
+});
+
+// Log circuit breaker creation
+logger.info('Circuit breaker created for OpenAI', {
+  name: 'openai',
+  failureThreshold: 3,
+  resetTimeout: 30000
 });
 
 /**
@@ -221,9 +200,9 @@ const openaiProxy = {
       }
       
       // Make the API call through the circuit breaker
-      response = await openaiBreaker.fire(async () => {
+      response = await openaiBreaker.execute(async () => {
         return await openai.createChatCompletion(params);
-      }, params);
+      });
       
       // Extract the response data
       const responseData = response.data;
