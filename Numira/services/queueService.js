@@ -5,52 +5,104 @@ const { BullAdapter } = require('@bull-board/api/bullAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
 const config = require('../config/config');
 const logger = require('../utils/logger');
+const { checkRedisConnection } = require('../utils/checkRedis');
 
 // Check if Redis is available
 let redisAvailable = true;
 let emailQueue, reportQueue, cleanupQueue, notificationQueue;
 
-// Function to test Redis connection
-const testRedisConnection = async () => {
-  try {
-    const Redis = require('ioredis');
-    const redis = new Redis({
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password || undefined,
-      connectTimeout: 5000, // Short timeout for quick failure
-      lazyConnect: true
-    });
-    
-    await redis.connect();
-    await redis.quit();
-    return true;
-  } catch (error) {
-    logger.warn('Redis connection failed, queue services will be disabled', {
-      error: error.message,
-      host: config.redis.host,
-      port: config.redis.port
-    });
-    return false;
+// In-memory queue stub for fallback when Redis is unavailable
+class InMemoryQueue {
+  constructor(name) {
+    this.name = name;
+    this.jobs = [];
+    this.processors = {};
+    this.events = {};
+    logger.info(`Created in-memory queue stub for ${name}`);
   }
-};
+
+  // Add a job to the queue
+  add(data, options = {}) {
+    const id = `mock-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const job = { id, data, options };
+    this.jobs.push(job);
+    logger.debug(`Added job to in-memory queue ${this.name}`, { id, data });
+    
+    // Process the job immediately if there's a processor
+    if (this.processors.default) {
+      setTimeout(() => {
+        try {
+          this.processors.default(job);
+        } catch (error) {
+          logger.error(`Error processing job in in-memory queue ${this.name}`, { error: error.message });
+        }
+      }, 10);
+    }
+    
+    return Promise.resolve(job);
+  }
+
+  // Register a processor function
+  process(processor) {
+    if (typeof processor === 'string') {
+      this.processors.default = () => {
+        logger.debug(`Mock processing job from ${this.name} with external processor: ${processor}`);
+      };
+    } else {
+      this.processors.default = processor;
+    }
+    return this;
+  }
+
+  // Register an event handler
+  on(event, handler) {
+    if (!this.events[event]) {
+      this.events[event] = [];
+    }
+    this.events[event].push(handler);
+    return this;
+  }
+
+  // Mock client for compatibility
+  get client() {
+    return {
+      on: (event, handler) => {
+        logger.debug(`Registered mock client event handler for ${event} on ${this.name}`);
+      }
+    };
+  }
+}
 
 // Initialize queues if Redis is available
 const initializeQueues = async () => {
   // Only check Redis in development mode
   if (config.server.env === 'development') {
-    redisAvailable = await testRedisConnection();
+    redisAvailable = await checkRedisConnection(config.redis, 5000, 'queue-service');
   }
   
   if (!redisAvailable) {
-    logger.info('Running without Redis in development mode - queue functionality disabled');
+    logger.info('Running without Redis in development mode - using in-memory queue stubs');
+    
+    // Create in-memory queue stubs
+    emailQueue = new InMemoryQueue('email-queue');
+    reportQueue = new InMemoryQueue('report-queue');
+    cleanupQueue = new InMemoryQueue('cleanup-queue');
+    notificationQueue = new InMemoryQueue('notification-queue');
+    
     return;
   }
   
   try {
+    // Create Redis client for queues
+    const redisOptions = {
+      ...config.redis,
+      maxRetriesPerRequest: 1, // Limit retries to prevent excessive logging
+      enableOfflineQueue: false // Don't queue commands when disconnected
+    };
+    
     // Create queue instances
     emailQueue = new Queue('email-queue', {
-      redis: config.redis,
+      redis: redisOptions,
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -61,9 +113,10 @@ const initializeQueues = async () => {
         removeOnFail: false
       }
     });
+    emailQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
     reportQueue = new Queue('report-queue', {
-      redis: config.redis,
+      redis: redisOptions,
       defaultJobOptions: {
         attempts: 2,
         backoff: {
@@ -74,9 +127,10 @@ const initializeQueues = async () => {
         removeOnFail: false
       }
     });
+    reportQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
     cleanupQueue = new Queue('cleanup-queue', {
-      redis: config.redis,
+      redis: redisOptions,
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -87,9 +141,10 @@ const initializeQueues = async () => {
         removeOnFail: false
       }
     });
+    cleanupQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
     notificationQueue = new Queue('notification-queue', {
-      redis: config.redis,
+      redis: redisOptions,
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -100,11 +155,20 @@ const initializeQueues = async () => {
         removeOnFail: false
       }
     });
+    notificationQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
     
-    logger.info('Queue services initialized successfully');
+    logger.info('Queue services initialized successfully with Redis');
   } catch (error) {
     redisAvailable = false;
-    logger.error('Failed to initialize queue services', { error: error.message });
+    logger.error('Failed to initialize queue services with Redis', { error: error.message });
+    
+    // Fallback to in-memory queue stubs
+    emailQueue = new InMemoryQueue('email-queue');
+    reportQueue = new InMemoryQueue('report-queue');
+    cleanupQueue = new InMemoryQueue('cleanup-queue');
+    notificationQueue = new InMemoryQueue('notification-queue');
+    
+    logger.info('Falling back to in-memory queue stubs');
   }
 };
 

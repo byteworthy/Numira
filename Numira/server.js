@@ -226,8 +226,13 @@ if (process.env.METRICS_ENDPOINT_ENABLED === 'true') {
   logger.info('Metrics endpoint enabled at /api/metrics');
 }
 
-// Set up Bull Board UI for queue monitoring
-queueService.setupBullBoard(app);
+// Set up Bull Board UI for queue monitoring if queues are available
+if (queueService.isRedisAvailable()) {
+  queueService.setupBullBoard(app);
+  logger.info('Bull Board UI initialized at /admin/queues');
+} else {
+  logger.warn('Bull Board UI skipped - Redis not available');
+}
 
 // Serve static assets in production
 if (process.env.NODE_ENV === 'production') {

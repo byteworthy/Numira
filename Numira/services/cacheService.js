@@ -9,6 +9,7 @@
 const config = require('../config/config');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
+const { checkRedisConnection, createRedisClient } = require('../utils/checkRedis');
 
 // Flag to track Redis availability
 let redisAvailable = true;
@@ -19,36 +20,15 @@ let redisConnectionPool = null;
 const memoryCache = new Map();
 const memoryCacheExpiry = new Map();
 
-// Function to test Redis connection
-const testRedisConnection = async () => {
-  try {
-    const Redis = require('ioredis');
-    const redis = new Redis({
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password || undefined,
-      connectTimeout: 5000, // Short timeout for quick failure
-      lazyConnect: true
-    });
-    
-    await redis.connect();
-    await redis.quit();
-    return true;
-  } catch (error) {
-    logger.warn('Redis connection failed, cache service will use in-memory fallback', {
-      error: error.message,
-      host: config.redis.host,
-      port: config.redis.port
-    });
-    return false;
-  }
-};
-
 // Initialize Redis client if available
 const initializeRedis = async () => {
   // Only check Redis in development mode
   if (config.server.env === 'development') {
-    redisAvailable = await testRedisConnection();
+    redisAvailable = await checkRedisConnection(
+      { ...config.redis, db: config.redis.cacheDb || 0 },
+      5000,
+      'cache-service'
+    );
   }
   
   if (!redisAvailable) {
@@ -57,24 +37,17 @@ const initializeRedis = async () => {
   }
   
   try {
-    const Redis = require('ioredis');
-    
     // Create Redis client for caching with connection pooling
-    redisClient = new Redis({
+    const redisOptions = {
       host: config.redis.host,
       port: config.redis.port,
       password: config.redis.password || undefined,
       db: config.redis.cacheDb || 0,
       tls: config.redis.tls ? {} : undefined,
       keyPrefix: 'cache:',
-      
-      // Connection pooling configuration
-      maxRetriesPerRequest: null,
+      maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
-      lazyConnect: false,
       connectTimeout: 10000,
-      
-      // Additional reliability settings
       retryStrategy: (times) => {
         const delay = Math.min(times * 50, 2000);
         return delay;
@@ -82,12 +55,20 @@ const initializeRedis = async () => {
       reconnectOnError: (err) => {
         const targetError = 'READONLY';
         if (err.message.includes(targetError)) {
-          // Only reconnect when the error contains "READONLY"
-          return true;
+          return true; // Only reconnect when the error contains "READONLY"
         }
         return false;
       }
-    });
+    };
+    
+    redisClient = createRedisClient(redisOptions, 'cache-service');
+    
+    if (!redisClient) {
+      redisAvailable = false;
+      logger.error('Failed to create Redis client for cache service');
+      logger.info('Falling back to in-memory cache');
+      return;
+    }
 
     // Create a Redis connection pool manager
     redisConnectionPool = {
@@ -103,16 +84,6 @@ const initializeRedis = async () => {
         }
       }
     };
-
-    // Log Redis connection errors
-    redisClient.on('error', (err) => {
-      logger.error('Redis cache connection error', { error: err.message });
-    });
-
-    // Log successful connection
-    redisClient.on('connect', () => {
-      logger.info('Redis cache connected successfully');
-    });
     
     logger.info('Redis cache service initialized successfully');
   } catch (error) {

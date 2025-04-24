@@ -11,40 +11,17 @@ const RedisStore = require('rate-limit-redis');
 const Redis = require('ioredis');
 const config = require('../config/config');
 const logger = require('../utils/logger');
+const { checkRedisConnection, createRedisClient } = require('../utils/checkRedis');
 
 // Flag to track Redis availability
 let redisAvailable = true;
 let redisClient = null;
 
-// Function to test Redis connection
-const testRedisConnection = async () => {
-  try {
-    const redis = new Redis({
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password || undefined,
-      connectTimeout: 5000, // Short timeout for quick failure
-      lazyConnect: true
-    });
-    
-    await redis.connect();
-    await redis.quit();
-    return true;
-  } catch (error) {
-    logger.warn('Redis connection failed, rate limiter will use memory store', {
-      error: error.message,
-      host: config.redis.host,
-      port: config.redis.port
-    });
-    return false;
-  }
-};
-
 // Initialize Redis client if available
 const initializeRedis = async () => {
   // Only check Redis in development mode
   if (config.server.env === 'development') {
-    redisAvailable = await testRedisConnection();
+    redisAvailable = await checkRedisConnection(config.redis, 5000, 'rate-limiter');
   }
   
   if (!redisAvailable) {
@@ -54,23 +31,26 @@ const initializeRedis = async () => {
   
   try {
     // Create Redis client for rate limiting
-    redisClient = new Redis({
+    const redisOptions = {
       host: config.redis.host,
       port: config.redis.port,
       password: config.redis.password || undefined,
       db: config.redis.db,
-      tls: config.redis.tls ? {} : undefined
-    });
-
-    // Log Redis connection errors
-    redisClient.on('error', (err) => {
-      logger.error('Redis rate limiter connection error', { error: err.message });
-    });
+      tls: config.redis.tls ? {} : undefined,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false
+    };
     
-    // Log successful connection
-    redisClient.on('connect', () => {
-      logger.info('Redis rate limiter connected successfully');
-    });
+    redisClient = createRedisClient(redisOptions, 'rate-limiter');
+    
+    if (!redisClient) {
+      redisAvailable = false;
+      logger.error('Failed to create Redis client for rate limiting');
+      logger.info('Falling back to memory store for rate limiting');
+      return;
+    }
+    
+    logger.info('Redis rate limiter initialized successfully');
   } catch (error) {
     redisAvailable = false;
     logger.error('Failed to initialize Redis for rate limiting', { error: error.message });
