@@ -21,7 +21,7 @@ let redisClient = null;
 const initializeRedis = async () => {
   // Only check Redis in development mode
   if (config.server.env === 'development') {
-    redisAvailable = await checkRedisConnection(config.redis, 5000, 'rate-limiter');
+    redisAvailable = await checkRedisConnection(config.redis, undefined, 'rate-limiter');
   }
   
   if (!redisAvailable) {

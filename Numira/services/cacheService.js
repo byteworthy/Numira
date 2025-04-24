@@ -26,7 +26,7 @@ const initializeRedis = async () => {
   if (config.server.env === 'development') {
     redisAvailable = await checkRedisConnection(
       { ...config.redis, db: config.redis.cacheDb || 0 },
-      5000,
+      undefined,
       'cache-service'
     );
   }

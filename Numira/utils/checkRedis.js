@@ -17,7 +17,7 @@ const config = require('../config/config');
  * @param {string} serviceName - Name of the service checking Redis
  * @returns {Promise<boolean>} - True if Redis is available, false otherwise
  */
-async function checkRedisConnection(options = {}, timeout = 5000, serviceName = 'service') {
+async function checkRedisConnection(options = {}, timeout = 1000, serviceName = 'service') {
   try {
     // Create Redis client with provided options
     const redisOptions = {

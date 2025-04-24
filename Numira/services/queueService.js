@@ -77,7 +77,7 @@ class InMemoryQueue {
 const initializeQueues = async () => {
   // Only check Redis in development mode
   if (config.server.env === 'development') {
-    redisAvailable = await checkRedisConnection(config.redis, 5000, 'queue-service');
+    redisAvailable = await checkRedisConnection(config.redis, undefined, 'queue-service');
   }
   
   if (!redisAvailable) {
