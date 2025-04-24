@@ -133,7 +133,7 @@ router.get('/:id', async (req, res) => {
  * @desc    Get terms of service history
  * @access  Private (Admin)
  */
-router.get('/history', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/history', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get all terms versions
     const termsHistory = await prisma.termsOfService.findMany({
@@ -309,7 +309,7 @@ const createTermsSchema = {
  */
 router.post('/', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   validateInput(createTermsSchema)
 ], async (req, res) => {
   try {
@@ -374,7 +374,7 @@ const updateTermsSchema = {
  */
 router.put('/:id', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   validateInput(updateTermsSchema)
 ], async (req, res) => {
   try {

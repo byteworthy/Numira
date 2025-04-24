@@ -38,8 +38,8 @@ model Journal {
   userId      String
   personaId   String
   roomId      String
-  prompt      String   @db.Text
-  response    String   @db.Text
+  prompt      String
+  response    String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -54,10 +54,10 @@ model Persona {
   name         String
   tone         String
   voice        String
-  description  String   @db.Text
-  systemPrompt String   @db.Text
-  defaultRooms String[] // Array of room IDs
-  tags         String[]
+  description  String
+  systemPrompt String
+  defaultRooms String   // originally String[], serialize as JSON
+  tags         String   // originally String[], serialize as JSON
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -67,11 +67,11 @@ model Persona {
 model Room {
   id                String     @id
   name              String
-  description       String     @db.Text
-  purpose           String     @db.Text
-  supportedPersonas String[]   // Array of persona IDs
+  description       String
+  purpose           String
+  supportedPersonas String     // originally String[], serialize as JSON
   samplePrompt      String
-  tags              String[]
+  tags              String     // originally String[], serialize as JSON
   promptType        PromptType
   features          Json       // JSON object for features
   createdAt         DateTime   @default(now())

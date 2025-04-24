@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
  * @desc    Get detailed system metrics
  * @access  Private (Admin)
  */
-router.get('/system', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/system', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get system metrics
     const metrics = {
@@ -135,7 +135,7 @@ router.get('/system', [auth, roleCheck('admin')], async (req, res) => {
  * @desc    Get database metrics
  * @access  Private (Admin)
  */
-router.get('/database', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/database', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get database metrics
     const metrics = {
@@ -260,7 +260,7 @@ router.get('/database', [auth, roleCheck('admin')], async (req, res) => {
  * @desc    Get AI usage metrics
  * @access  Private (Admin)
  */
-router.get('/ai', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/ai', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get AI usage metrics
     const thirtyDaysAgo = new Date();
@@ -388,7 +388,7 @@ router.get('/ai', [auth, roleCheck('admin')], async (req, res) => {
  * @desc    Get queue metrics
  * @access  Private (Admin)
  */
-router.get('/queues', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/queues', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get queue metrics
     const metrics = {
@@ -445,7 +445,7 @@ router.get('/queues', [auth, roleCheck('admin')], async (req, res) => {
  * @desc    Get audit log metrics
  * @access  Private (Admin)
  */
-router.get('/audit', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/audit', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get audit log metrics
     const thirtyDaysAgo = new Date();
@@ -543,7 +543,7 @@ router.get('/audit', [auth, roleCheck('admin')], async (req, res) => {
  * @desc    Get a human-readable summary of system metrics
  * @access  Private (Admin)
  */
-router.get('/summary', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/summary', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get system metrics
     const uptime = Math.floor(process.uptime());
