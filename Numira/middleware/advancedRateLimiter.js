@@ -2,6 +2,7 @@
  * Advanced Rate Limiter Middleware
  * 
  * Provides both IP-based and user-based rate limiting with Redis storage.
+ * Falls back to memory store when Redis is unavailable.
  * Configurable limits, windows, and different limits for different routes.
  */
 
@@ -11,32 +12,89 @@ const Redis = require('ioredis');
 const config = require('../config/config');
 const logger = require('../utils/logger');
 
-// Create Redis client for rate limiting
-const redisClient = new Redis({
-  host: config.redis.host,
-  port: config.redis.port,
-  password: config.redis.password || undefined,
-  db: config.redis.db,
-  tls: config.redis.tls ? {} : undefined
-});
+// Flag to track Redis availability
+let redisAvailable = true;
+let redisClient = null;
 
-// Log Redis connection errors
-redisClient.on('error', (err) => {
-  logger.error('Redis rate limiter connection error', { error: err.message });
-});
+// Function to test Redis connection
+const testRedisConnection = async () => {
+  try {
+    const redis = new Redis({
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password || undefined,
+      connectTimeout: 5000, // Short timeout for quick failure
+      lazyConnect: true
+    });
+    
+    await redis.connect();
+    await redis.quit();
+    return true;
+  } catch (error) {
+    logger.warn('Redis connection failed, rate limiter will use memory store', {
+      error: error.message,
+      host: config.redis.host,
+      port: config.redis.port
+    });
+    return false;
+  }
+};
+
+// Initialize Redis client if available
+const initializeRedis = async () => {
+  // Only check Redis in development mode
+  if (config.server.env === 'development') {
+    redisAvailable = await testRedisConnection();
+  }
+  
+  if (!redisAvailable) {
+    logger.info('Running without Redis in development mode - using memory store for rate limiting');
+    return;
+  }
+  
+  try {
+    // Create Redis client for rate limiting
+    redisClient = new Redis({
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password || undefined,
+      db: config.redis.db,
+      tls: config.redis.tls ? {} : undefined
+    });
+
+    // Log Redis connection errors
+    redisClient.on('error', (err) => {
+      logger.error('Redis rate limiter connection error', { error: err.message });
+    });
+    
+    // Log successful connection
+    redisClient.on('connect', () => {
+      logger.info('Redis rate limiter connected successfully');
+    });
+  } catch (error) {
+    redisAvailable = false;
+    logger.error('Failed to initialize Redis for rate limiting', { error: error.message });
+    logger.info('Falling back to memory store for rate limiting');
+  }
+};
 
 /**
- * Create a Redis store for rate limiting
+ * Create a store for rate limiting
  * 
  * @param {string} prefix - Key prefix for Redis
- * @returns {Object} Redis store for rate-limit-redis
+ * @returns {Object} Redis store or memory store
  */
-function createRedisStore(prefix) {
-  return new RedisStore({
-    // @ts-ignore - Type definitions are outdated
-    sendCommand: (...args) => redisClient.call(...args),
-    prefix: `ratelimit:${prefix}:`
-  });
+function createStore(prefix) {
+  if (redisAvailable && redisClient) {
+    return new RedisStore({
+      // @ts-ignore - Type definitions are outdated
+      sendCommand: (...args) => redisClient.call(...args),
+      prefix: `ratelimit:${prefix}:`
+    });
+  }
+  
+  // Use memory store as fallback
+  return undefined; // express-rate-limit uses memory store by default when store is undefined
 }
 
 /**
@@ -53,7 +111,7 @@ const standardLimiter = rateLimit({
     message: 'Too many requests from this IP, please try again later.',
     data: null
   },
-  store: createRedisStore('standard'),
+  store: createStore('standard'),
   keyGenerator: (req) => {
     return `${req.ip}`;
   },
@@ -77,7 +135,7 @@ const strictLimiter = rateLimit({
     message: 'Too many authentication attempts, please try again later.',
     data: null
   },
-  store: createRedisStore('strict'),
+  store: createStore('strict'),
   keyGenerator: (req) => {
     return `${req.ip}`;
   }
@@ -97,7 +155,7 @@ const userLimiter = rateLimit({
     message: 'Too many requests from this user, please try again later.',
     data: null
   },
-  store: createRedisStore('user'),
+  store: createStore('user'),
   keyGenerator: (req) => {
     // Use user ID if authenticated, otherwise fall back to IP
     return req.user ? `user:${req.user.id}` : `ip:${req.ip}`;
@@ -122,12 +180,43 @@ const aiLimiter = rateLimit({
     message: 'AI request limit reached, please try again later.',
     data: null
   },
-  store: createRedisStore('ai'),
+  store: createStore('ai'),
   keyGenerator: (req) => {
     // Use user ID if authenticated, otherwise fall back to IP
     return req.user ? `user:${req.user.id}` : `ip:${req.ip}`;
   }
 });
+
+// In-memory abuse tracking as fallback when Redis is unavailable
+const abuseTracker = {
+  counts: new Map(),
+  blocked: new Map(),
+  
+  increment(key) {
+    const count = (this.counts.get(key) || 0) + 1;
+    this.counts.set(key, count);
+    
+    // Set expiry by scheduling cleanup
+    setTimeout(() => {
+      this.counts.delete(key);
+    }, 24 * 60 * 60 * 1000); // 24 hours
+    
+    return count;
+  },
+  
+  isBlocked(key) {
+    return this.blocked.has(key);
+  },
+  
+  block(key) {
+    this.blocked.set(key, true);
+    
+    // Set expiry by scheduling cleanup
+    setTimeout(() => {
+      this.blocked.delete(key);
+    }, 24 * 60 * 60 * 1000); // 24 hours
+  }
+};
 
 /**
  * Abuse detection middleware
@@ -144,7 +233,14 @@ function abuseDetection() {
       const key = userId ? `abuse:user:${userId}` : `abuse:ip:${ip}`;
       
       // Check if already blocked
-      const isBlocked = await redisClient.get(`${key}:blocked`);
+      let isBlocked = false;
+      
+      if (redisAvailable && redisClient) {
+        isBlocked = await redisClient.get(`${key}:blocked`);
+      } else {
+        isBlocked = abuseTracker.isBlocked(key);
+      }
+      
       if (isBlocked) {
         logger.warn('Blocked suspicious activity', {
           ip,
@@ -167,17 +263,27 @@ function abuseDetection() {
       res.on('finish', async () => {
         // Only track 4xx and 5xx responses
         if (res.statusCode >= 400) {
-          // Increment the counter
-          const count = await redisClient.incr(key);
+          let count;
           
-          // Set expiry if this is the first increment
-          if (count === 1) {
-            await redisClient.expire(key, ABUSE_WINDOW);
+          // Increment the counter
+          if (redisAvailable && redisClient) {
+            count = await redisClient.incr(key);
+            
+            // Set expiry if this is the first increment
+            if (count === 1) {
+              await redisClient.expire(key, ABUSE_WINDOW);
+            }
+          } else {
+            count = abuseTracker.increment(key);
           }
           
           // If threshold exceeded, block the IP/user
           if (count >= ABUSE_THRESHOLD) {
-            await redisClient.set(`${key}:blocked`, '1', 'EX', ABUSE_WINDOW);
+            if (redisAvailable && redisClient) {
+              await redisClient.set(`${key}:blocked`, '1', 'EX', ABUSE_WINDOW);
+            } else {
+              abuseTracker.block(key);
+            }
             
             logger.warn('Abuse threshold exceeded, blocking access', {
               ip,
@@ -198,7 +304,14 @@ function abuseDetection() {
   };
 }
 
+// Check if Redis is available
+const isRedisAvailable = () => {
+  return redisAvailable;
+};
+
 module.exports = {
+  initializeRedis,
+  isRedisAvailable,
   standardLimiter,
   strictLimiter,
   userLimiter,

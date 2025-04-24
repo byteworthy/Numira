@@ -2,68 +2,125 @@
  * Cache Service
  * 
  * Provides caching functionality using Redis for improved performance.
+ * Falls back to in-memory cache when Redis is unavailable.
  * Implements methods for storing, retrieving, and invalidating cached data.
  */
 
-const Redis = require('ioredis');
 const config = require('../config/config');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 
-// Create Redis client for caching with connection pooling
-const redisClient = new Redis({
-  host: config.redis.host,
-  port: config.redis.port,
-  password: config.redis.password || undefined,
-  db: config.redis.cacheDb || 0,
-  tls: config.redis.tls ? {} : undefined,
-  keyPrefix: 'cache:',
-  
-  // Connection pooling configuration
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-  lazyConnect: false,
-  connectTimeout: 10000,
-  
-  // Additional reliability settings
-  retryStrategy: (times) => {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  },
-  reconnectOnError: (err) => {
-    const targetError = 'READONLY';
-    if (err.message.includes(targetError)) {
-      // Only reconnect when the error contains "READONLY"
-      return true;
-    }
-    return false;
-  }
-});
+// Flag to track Redis availability
+let redisAvailable = true;
+let redisClient = null;
+let redisConnectionPool = null;
 
-// Create a Redis connection pool manager
-const redisConnectionPool = {
-  getConnection: () => redisClient,
-  
-  // Method to check health of the connection
-  async ping() {
-    try {
-      return await redisClient.ping();
-    } catch (error) {
-      logger.error('Redis ping failed', { error: error.message });
-      return false;
-    }
+// In-memory cache as fallback when Redis is unavailable
+const memoryCache = new Map();
+const memoryCacheExpiry = new Map();
+
+// Function to test Redis connection
+const testRedisConnection = async () => {
+  try {
+    const Redis = require('ioredis');
+    const redis = new Redis({
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password || undefined,
+      connectTimeout: 5000, // Short timeout for quick failure
+      lazyConnect: true
+    });
+    
+    await redis.connect();
+    await redis.quit();
+    return true;
+  } catch (error) {
+    logger.warn('Redis connection failed, cache service will use in-memory fallback', {
+      error: error.message,
+      host: config.redis.host,
+      port: config.redis.port
+    });
+    return false;
   }
 };
 
-// Log Redis connection errors
-redisClient.on('error', (err) => {
-  logger.error('Redis cache connection error', { error: err.message });
-});
+// Initialize Redis client if available
+const initializeRedis = async () => {
+  // Only check Redis in development mode
+  if (config.server.env === 'development') {
+    redisAvailable = await testRedisConnection();
+  }
+  
+  if (!redisAvailable) {
+    logger.info('Running without Redis in development mode - using in-memory cache');
+    return;
+  }
+  
+  try {
+    const Redis = require('ioredis');
+    
+    // Create Redis client for caching with connection pooling
+    redisClient = new Redis({
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password || undefined,
+      db: config.redis.cacheDb || 0,
+      tls: config.redis.tls ? {} : undefined,
+      keyPrefix: 'cache:',
+      
+      // Connection pooling configuration
+      maxRetriesPerRequest: null,
+      enableOfflineQueue: false,
+      lazyConnect: false,
+      connectTimeout: 10000,
+      
+      // Additional reliability settings
+      retryStrategy: (times) => {
+        const delay = Math.min(times * 50, 2000);
+        return delay;
+      },
+      reconnectOnError: (err) => {
+        const targetError = 'READONLY';
+        if (err.message.includes(targetError)) {
+          // Only reconnect when the error contains "READONLY"
+          return true;
+        }
+        return false;
+      }
+    });
 
-// Log successful connection
-redisClient.on('connect', () => {
-  logger.info('Redis cache connected successfully');
-});
+    // Create a Redis connection pool manager
+    redisConnectionPool = {
+      getConnection: () => redisClient,
+      
+      // Method to check health of the connection
+      async ping() {
+        try {
+          return await redisClient.ping();
+        } catch (error) {
+          logger.error('Redis ping failed', { error: error.message });
+          return false;
+        }
+      }
+    };
+
+    // Log Redis connection errors
+    redisClient.on('error', (err) => {
+      logger.error('Redis cache connection error', { error: err.message });
+    });
+
+    // Log successful connection
+    redisClient.on('connect', () => {
+      logger.info('Redis cache connected successfully');
+    });
+    
+    logger.info('Redis cache service initialized successfully');
+  } catch (error) {
+    redisAvailable = false;
+    logger.error('Failed to initialize Redis cache service', { error: error.message });
+    logger.info('Falling back to in-memory cache');
+  }
+};
 
 /**
  * Generate a cache key from the provided parameters
@@ -99,11 +156,32 @@ function generateCacheKey(prefix, params) {
 async function set(key, value, ttl = 3600) {
   try {
     const serializedValue = JSON.stringify(value);
-    if (ttl > 0) {
-      await redisClient.set(key, serializedValue, 'EX', ttl);
+    
+    if (redisAvailable && redisClient) {
+      if (ttl > 0) {
+        await redisClient.set(key, serializedValue, 'EX', ttl);
+      } else {
+        await redisClient.set(key, serializedValue);
+      }
     } else {
-      await redisClient.set(key, serializedValue);
+      // Use in-memory cache as fallback
+      memoryCache.set(key, serializedValue);
+      
+      if (ttl > 0) {
+        // Set expiry time
+        const expiryTime = Date.now() + (ttl * 1000);
+        memoryCacheExpiry.set(key, expiryTime);
+        
+        // Schedule cleanup for expired items
+        setTimeout(() => {
+          if (memoryCacheExpiry.get(key) <= Date.now()) {
+            memoryCache.delete(key);
+            memoryCacheExpiry.delete(key);
+          }
+        }, ttl * 1000);
+      }
     }
+    
     return true;
   } catch (error) {
     logger.error('Cache set error', { key, error: error.message });
@@ -119,7 +197,23 @@ async function set(key, value, ttl = 3600) {
  */
 async function get(key) {
   try {
-    const value = await redisClient.get(key);
+    let value;
+    
+    if (redisAvailable && redisClient) {
+      value = await redisClient.get(key);
+    } else {
+      // Use in-memory cache as fallback
+      value = memoryCache.get(key);
+      
+      // Check if value has expired
+      const expiryTime = memoryCacheExpiry.get(key);
+      if (expiryTime && expiryTime <= Date.now()) {
+        memoryCache.delete(key);
+        memoryCacheExpiry.delete(key);
+        return null;
+      }
+    }
+    
     if (!value) return null;
     
     return JSON.parse(value);
@@ -137,7 +231,14 @@ async function get(key) {
  */
 async function del(key) {
   try {
-    await redisClient.del(key);
+    if (redisAvailable && redisClient) {
+      await redisClient.del(key);
+    } else {
+      // Use in-memory cache as fallback
+      memoryCache.delete(key);
+      memoryCacheExpiry.delete(key);
+    }
+    
     return true;
   } catch (error) {
     logger.error('Cache delete error', { key, error: error.message });
@@ -153,13 +254,33 @@ async function del(key) {
  */
 async function delByPattern(pattern) {
   try {
-    // Get all keys matching the pattern
-    const keys = await redisClient.keys(pattern);
-    
-    if (keys.length > 0) {
-      // Delete all matching keys
-      await redisClient.del(...keys);
-      logger.info(`Deleted ${keys.length} cache keys matching pattern: ${pattern}`);
+    if (redisAvailable && redisClient) {
+      // Get all keys matching the pattern
+      const keys = await redisClient.keys(pattern);
+      
+      if (keys.length > 0) {
+        // Delete all matching keys
+        await redisClient.del(...keys);
+        logger.info(`Deleted ${keys.length} cache keys matching pattern: ${pattern}`);
+      }
+    } else {
+      // Use in-memory cache as fallback
+      // Convert glob pattern to regex
+      const regexPattern = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+      let count = 0;
+      
+      // Iterate through all keys and delete matches
+      for (const key of memoryCache.keys()) {
+        if (regexPattern.test(key)) {
+          memoryCache.delete(key);
+          memoryCacheExpiry.delete(key);
+          count++;
+        }
+      }
+      
+      if (count > 0) {
+        logger.info(`Deleted ${count} in-memory cache keys matching pattern: ${pattern}`);
+      }
     }
     
     return true;
@@ -208,7 +329,14 @@ async function getOrSet(key, fn, ttl = 3600) {
  */
 async function clear() {
   try {
-    await redisClient.flushdb();
+    if (redisAvailable && redisClient) {
+      await redisClient.flushdb();
+    } else {
+      // Use in-memory cache as fallback
+      memoryCache.clear();
+      memoryCacheExpiry.clear();
+    }
+    
     logger.info('Cache cleared');
     return true;
   } catch (error) {
@@ -224,13 +352,23 @@ async function clear() {
  */
 async function getStats() {
   try {
-    const info = await redisClient.info();
-    const dbSize = await redisClient.dbsize();
-    
-    return {
-      size: dbSize,
-      info: info
-    };
+    if (redisAvailable && redisClient) {
+      const info = await redisClient.info();
+      const dbSize = await redisClient.dbsize();
+      
+      return {
+        size: dbSize,
+        info: info,
+        type: 'redis'
+      };
+    } else {
+      // Use in-memory cache as fallback
+      return {
+        size: memoryCache.size,
+        info: 'In-memory cache',
+        type: 'memory'
+      };
+    }
   } catch (error) {
     logger.error('Cache stats error', { error: error.message });
     return { error: error.message };
@@ -258,7 +396,14 @@ async function cachedAIResponse(userInput, personaId, roomId, generateFn) {
   return await getOrSet(key, generateFn, 86400);
 }
 
+// Check if Redis is available
+const isRedisAvailable = () => {
+  return redisAvailable;
+};
+
 module.exports = {
+  initializeRedis,
+  isRedisAvailable,
   generateCacheKey,
   set,
   get,
@@ -268,5 +413,5 @@ module.exports = {
   clear,
   getStats,
   cachedAIResponse,
-  redisConnectionPool
+  redisConnectionPool: () => redisConnectionPool
 };

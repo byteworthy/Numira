@@ -8,6 +8,8 @@ const rateLimit = require('express-rate-limit');
 const config = require('./config/config');
 const logger = require('./utils/logger');
 const queueService = require('./services/queueService');
+const cacheService = require('./services/cacheService');
+const rateLimiter = require('./middleware/advancedRateLimiter');
 const { setupSwagger } = require('./config/swagger');
 const markdownIt = require('markdown-it')();
 const fs = require('fs');
@@ -43,14 +45,34 @@ app.use(express.urlencoded({ extended: true }));
 // Compress responses
 app.use(compression());
 
-// Import advanced rate limiter
-const { standardLimiter, abuseDetection } = require('./middleware/advancedRateLimiter');
+// Initialize Redis-dependent services
+const initializeRedisServices = async () => {
+  try {
+    // Initialize queue service
+    await queueService.initializeQueues();
+    
+    // Initialize cache service
+    await cacheService.initializeRedis();
+    
+    // Initialize rate limiter
+    await rateLimiter.initializeRedis();
+    
+    // Log Redis availability status
+    logger.info('Redis services initialization complete', {
+      queuesAvailable: queueService.isRedisAvailable(),
+      cacheAvailable: cacheService.isRedisAvailable(),
+      rateLimiterAvailable: rateLimiter.isRedisAvailable()
+    });
+  } catch (error) {
+    logger.error('Error initializing Redis services', { error: error.message });
+  }
+};
 
 // Apply standard rate limiting to all routes
-app.use(standardLimiter);
+app.use(rateLimiter.standardLimiter);
 
 // Apply abuse detection middleware
-app.use(abuseDetection());
+app.use(rateLimiter.abuseDetection());
 
 // Apply disclaimer middleware to all API responses
 const disclaimerMiddleware = require('./middleware/disclaimer');
@@ -240,20 +262,20 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = config.server.port;
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   logger.info(`Server running in ${config.server.env} mode on port ${PORT}`);
+  
+  // Initialize Redis-dependent services
+  await initializeRedisServices();
   
   // Initialize job processors
   queueService.initProcessors();
-  logger.info('Job processors initialized');
   
   // Set up queue monitoring
   queueService.setupQueueMonitoring();
-  logger.info('Queue monitoring initialized');
   
   // Schedule recurring jobs
   queueService.scheduleRecurringJobs();
-  logger.info('Recurring jobs scheduled');
 });
 
 // Handle unhandled promise rejections
