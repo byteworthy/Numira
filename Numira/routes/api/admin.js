@@ -1,6 +1,16 @@
 const express = require('express');
 const router = express.Router();
+const auth = require('../../middleware/auth');
+const roleCheck = require('../../middleware/roleCheck');
 const logger = require('../../utils/logger');
+
+// Import admin sub-routes
+const billingRoutes = require('./admin/billing');
+const telemetryRoutes = require('./admin/telemetry');
+
+// Use admin sub-routes
+router.use('/billing', billingRoutes);
+router.use('/telemetry', telemetryRoutes);
 
 /**
  * @route   GET api/admin/health
@@ -18,14 +28,18 @@ router.get('/health', (req, res) => {
 
 /**
  * @route   GET api/admin
- * @desc    Placeholder endpoint for admin API
- * @access  Public
+ * @desc    Admin dashboard overview endpoint
+ * @access  Private (Admin)
  */
-router.get('/', (req, res) => {
-  logger.info('Admin API placeholder endpoint accessed');
+router.get('/', [auth, roleCheck('admin')], (req, res) => {
+  logger.info('Admin dashboard accessed', { userId: req.user.id });
   return res.status(200).json({ 
-    message: 'Admin API placeholder - functionality to be implemented',
-    timestamp: new Date().toISOString() 
+    message: 'Admin dashboard API',
+    timestamp: new Date().toISOString(),
+    user: {
+      id: req.user.id,
+      role: req.user.role
+    }
   });
 });
 
