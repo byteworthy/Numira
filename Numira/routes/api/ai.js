@@ -7,7 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const { check } = require('express-validator');
-const { generateResponse, checkCompatibility } = require('../../controllers/aiController');
+const { generateResponse, checkCompatibility, chat } = require('../../controllers/aiController');
 const auth = require('../../middleware/auth');
 const disclaimer = require('../../middleware/disclaimer').default;
 const { aiLimiter } = require('../../middleware/advancedRateLimiter');
@@ -44,6 +44,22 @@ router.get('/compatibility/:personaId/:roomId', [
   check('personaId').escape(),
   check('roomId').escape()
 ], checkCompatibility);
+
+/**
+ * @route   POST /api/ai/direct-chat
+ * @desc    Direct chat with Claude 3 Sonnet
+ * @access  Private
+ */
+router.post('/direct-chat', [
+  auth, // Require authentication
+  aiLimiter, // Apply AI-specific rate limiting
+  
+  // Input validation
+  check('message', 'Message is required').notEmpty().trim(),
+  
+  // Sanitize inputs
+  check('message').escape()
+], chat);
 
 /**
  * @route   GET /api/ai/health

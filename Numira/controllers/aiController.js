@@ -7,6 +7,7 @@
 
 const { getAIResponse } = require('../services/aiService');
 const { validationResult } = require('express-validator');
+const { anthropic } = require('../services/llmProviderService');
 
 /**
  * Generate AI response based on user input, persona, and room
@@ -142,7 +143,72 @@ function checkCompatibility(req, res) {
   }
 }
 
+/**
+ * Direct chat with Claude 3 Sonnet
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @returns {Promise<Object>} - JSON response
+ */
+async function chat(req, res) {
+  try {
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation error',
+        errors: errors.array()
+      });
+    }
+
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Message is required'
+      });
+    }
+
+    // Call Claude directly
+    const response = await anthropic.messages.create({
+      model: 'claude-3-sonnet',
+      system: 'You are a helpful AI assistant.',
+      messages: [{ role: 'user', content: message }],
+      temperature: 0.7,
+      max_tokens: 1000
+    });
+    
+    // Return successful response
+    return res.json({
+      status: 'success',
+      data: response,
+      message: 'Claude response generated successfully'
+    });
+  } catch (error) {
+    // Handle specific error types
+    if (error.message.includes('Rate limit')) {
+      return res.status(429).json({
+        status: 'error',
+        message: error.message,
+        metadata: {
+          retryAfter: '1 hour'
+        }
+      });
+    }
+    
+    // Generic error handling
+    console.error('AI Controller Error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'An error occurred while generating Claude response'
+    });
+  }
+}
+
 module.exports = {
   generateResponse,
-  checkCompatibility
+  checkCompatibility,
+  chat
 };
