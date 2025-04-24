@@ -31,7 +31,7 @@ router.get('/health', (req, res) => {
  * @desc    Admin dashboard overview endpoint
  * @access  Private (Admin)
  */
-router.get('/', [auth, roleCheck('admin')], (req, res) => {
+router.get('/', [auth, roleCheck(['admin'])], (req, res) => {
   logger.info('Admin dashboard accessed', { userId: req.user.id });
   return res.status(200).json({ 
     message: 'Admin dashboard API',

@@ -15,7 +15,7 @@ const logger = require('../../../utils/logger');
  * @desc    Health check endpoint for admin billing API
  * @access  Private (Admin)
  */
-router.get('/health', [auth, roleCheck('admin')], (req, res) => {
+router.get('/health', [auth, roleCheck(['admin'])], (req, res) => {
   logger.info('Admin Billing API health check');
   return res.status(200).json({ 
     status: 'ok', 
@@ -28,7 +28,7 @@ router.get('/health', [auth, roleCheck('admin')], (req, res) => {
  * @desc    Placeholder endpoint for admin billing API
  * @access  Private (Admin)
  */
-router.get('/', [auth, roleCheck('admin')], (req, res) => {
+router.get('/', [auth, roleCheck(['admin'])], (req, res) => {
   logger.info('Admin Billing API placeholder endpoint accessed');
   return res.status(200).json({ 
     message: 'This route is under construction'

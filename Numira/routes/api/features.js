@@ -55,7 +55,7 @@ router.get('/', async (req, res) => {
  * @desc    Get all feature flags including internal ones
  * @access  Private (Admin)
  */
-router.get('/all', [auth, roleCheck('admin')], async (req, res) => {
+router.get('/all', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     // Get all feature flags
     const flags = await featureFlags.getAllFlags();
@@ -130,7 +130,7 @@ const updateFlagSchema = {
  */
 router.put('/:key', [
   auth, 
-  roleCheck('admin'),
+  roleCheck(['admin']),
   validateInput(updateFlagSchema)
 ], async (req, res) => {
   try {
@@ -167,7 +167,7 @@ router.put('/:key', [
  * @desc    Reset feature flags to defaults
  * @access  Private (Admin)
  */
-router.post('/reset', [auth, roleCheck('admin')], async (req, res) => {
+router.post('/reset', [auth, roleCheck(['admin'])], async (req, res) => {
   try {
     const { global, userId, orgId } = req.body;
     

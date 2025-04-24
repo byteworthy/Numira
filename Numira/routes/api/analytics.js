@@ -20,7 +20,7 @@ const { check, query, validationResult } = require('express-validator');
  */
 router.get('/personas', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -63,7 +63,7 @@ router.get('/personas', [
  */
 router.get('/rooms', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -106,7 +106,7 @@ router.get('/rooms', [
  */
 router.get('/combinations', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -149,7 +149,7 @@ router.get('/combinations', [
  */
 router.get('/ai', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -192,7 +192,7 @@ router.get('/ai', [
  */
 router.get('/users', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -235,7 +235,7 @@ router.get('/users', [
  */
 router.get('/summary', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   query('startDate').optional().isISO8601().withMessage('Start date must be a valid ISO 8601 date'),
   query('endDate').optional().isISO8601().withMessage('End date must be a valid ISO 8601 date')
 ], async (req, res) => {
@@ -278,7 +278,7 @@ router.get('/summary', [
  */
 router.post('/cleanup', [
   auth,
-  roleCheck('admin'),
+  roleCheck(['admin']),
   check('retentionDays').optional().isInt({ min: 30, max: 365 }).withMessage('Retention days must be between 30 and 365')
 ], async (req, res) => {
   try {
