@@ -5,10 +5,10 @@ const { BullAdapter } = require('@bull-board/api/bullAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
 const config = require('../config/config');
 const logger = require('../utils/logger');
-const { checkRedisConnection } = require('../utils/checkRedis');
+const { checkRedisConnection, createRedisClient } = require('../utils/checkRedis');
 
 // Check if Redis is available
-let redisAvailable = true;
+let redisAvailable = false;
 let emailQueue, reportQueue, cleanupQueue, notificationQueue;
 
 // In-memory queue stub for fallback when Redis is unavailable
@@ -73,15 +73,13 @@ class InMemoryQueue {
   }
 }
 
-// Initialize queues if Redis is available
+// Initialize queues with Redis or fallback to in-memory
 const initializeQueues = async () => {
-  // Only check Redis in development mode
-  if (config.server.env === 'development') {
-    redisAvailable = await checkRedisConnection(config.redis, undefined, 'queue-service');
-  }
+  // Check Redis connection
+  redisAvailable = await checkRedisConnection();
   
   if (!redisAvailable) {
-    logger.info('Running without Redis in development mode - using in-memory queue stubs');
+    logger.info('Redis unavailable - using in-memory queue stubs for Replit compatibility');
     
     // Create in-memory queue stubs
     emailQueue = new InMemoryQueue('email-queue');
@@ -89,72 +87,38 @@ const initializeQueues = async () => {
     cleanupQueue = new InMemoryQueue('cleanup-queue');
     notificationQueue = new InMemoryQueue('notification-queue');
     
+    console.log('Queue fallback active: Using in-memory queue system for Replit compatibility');
     return;
   }
   
   try {
     // Create Redis client for queues
-    const redisOptions = {
-      ...config.redis,
-      maxRetriesPerRequest: 1, // Limit retries to prevent excessive logging
-      enableOfflineQueue: false // Don't queue commands when disconnected
+    const redisClient = createRedisClient();
+    
+    if (!redisClient) {
+      throw new Error('Failed to create Redis client');
+    }
+    
+    // Create queue instances with the client
+    const queueOptions = {
+      createClient: () => redisClient,
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: false
+      }
     };
     
     // Create queue instances
-    emailQueue = new Queue('email-queue', {
-      redis: redisOptions,
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-      }
-    });
+    emailQueue = new Queue('email-queue', queueOptions);
     emailQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
-    reportQueue = new Queue('report-queue', {
-      redis: redisOptions,
-      defaultJobOptions: {
-        attempts: 2,
-        backoff: {
-          type: 'fixed',
-          delay: 5000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-      }
-    });
+    reportQueue = new Queue('report-queue', queueOptions);
     reportQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
-    cleanupQueue = new Queue('cleanup-queue', {
-      redis: redisOptions,
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-      }
-    });
+    cleanupQueue = new Queue('cleanup-queue', queueOptions);
     cleanupQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
 
-    notificationQueue = new Queue('notification-queue', {
-      redis: redisOptions,
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000
-        },
-        removeOnComplete: true,
-        removeOnFail: false
-      }
-    });
+    notificationQueue = new Queue('notification-queue', queueOptions);
     notificationQueue.client.on('error', () => {}); // Suppress noisy reconnect errors
     
     logger.info('Queue services initialized successfully with Redis');

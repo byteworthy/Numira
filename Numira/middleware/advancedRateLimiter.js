@@ -19,29 +19,18 @@ let redisClient = null;
 
 // Initialize Redis client if available
 const initializeRedis = async () => {
-  // Only check Redis in development mode
-  if (config.server.env === 'development') {
-    redisAvailable = await checkRedisConnection(config.redis, undefined, 'rate-limiter');
-  }
+  // Check Redis connection
+  redisAvailable = await checkRedisConnection();
   
   if (!redisAvailable) {
-    logger.info('Running without Redis in development mode - using memory store for rate limiting');
+    logger.info('Redis unavailable - using memory store for rate limiting (Replit compatibility)');
+    console.log('Rate limiter fallback active: Using in-memory rate limiting for Replit compatibility');
     return;
   }
   
   try {
     // Create Redis client for rate limiting
-    const redisOptions = {
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password || undefined,
-      db: config.redis.db,
-      tls: config.redis.tls ? {} : undefined,
-      maxRetriesPerRequest: 1,
-      enableOfflineQueue: false
-    };
-    
-    redisClient = createRedisClient(redisOptions, 'rate-limiter');
+    redisClient = createRedisClient();
     
     if (!redisClient) {
       redisAvailable = false;

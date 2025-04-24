@@ -2,8 +2,8 @@
  * Cache Service
  * 
  * Provides caching functionality using Redis for improved performance.
- * Falls back to in-memory cache when Redis is unavailable.
- * Implements methods for storing, retrieving, and invalidating cached data.
+ * Falls back to in-memory cache when Redis is unavailable (Replit compatibility).
+ * Implements methods for storing, retrieving, and invalidating cached data with TTL support.
  */
 
 const config = require('../config/config');
@@ -12,9 +12,8 @@ const crypto = require('crypto');
 const { checkRedisConnection, createRedisClient } = require('../utils/checkRedis');
 
 // Flag to track Redis availability
-let redisAvailable = true;
+let redisAvailable = false;
 let redisClient = null;
-let redisConnectionPool = null;
 
 // In-memory cache as fallback when Redis is unavailable
 const memoryCache = new Map();
@@ -22,68 +21,25 @@ const memoryCacheExpiry = new Map();
 
 // Initialize Redis client if available
 const initializeRedis = async () => {
-  // Only check Redis in development mode
-  if (config.server.env === 'development') {
-    redisAvailable = await checkRedisConnection(
-      { ...config.redis, db: config.redis.cacheDb || 0 },
-      undefined,
-      'cache-service'
-    );
-  }
+  // Check Redis connection
+  redisAvailable = await checkRedisConnection();
   
   if (!redisAvailable) {
-    logger.info('Running without Redis in development mode - using in-memory cache');
+    logger.info('Redis unavailable - using in-memory cache for Replit compatibility');
+    console.log('Cache fallback active: Using in-memory cache system for Replit compatibility');
     return;
   }
   
   try {
-    // Create Redis client for caching with connection pooling
-    const redisOptions = {
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password || undefined,
-      db: config.redis.cacheDb || 0,
-      tls: config.redis.tls ? {} : undefined,
-      keyPrefix: 'cache:',
-      maxRetriesPerRequest: 1,
-      enableOfflineQueue: false,
-      connectTimeout: 10000,
-      retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-      },
-      reconnectOnError: (err) => {
-        const targetError = 'READONLY';
-        if (err.message.includes(targetError)) {
-          return true; // Only reconnect when the error contains "READONLY"
-        }
-        return false;
-      }
-    };
-    
-    redisClient = createRedisClient(redisOptions, 'cache-service');
+    // Create Redis client for caching
+    redisClient = createRedisClient();
     
     if (!redisClient) {
-      redisAvailable = false;
-      logger.error('Failed to create Redis client for cache service');
-      logger.info('Falling back to in-memory cache');
-      return;
+      throw new Error('Failed to create Redis client');
     }
-
-    // Create a Redis connection pool manager
-    redisConnectionPool = {
-      getConnection: () => redisClient,
-      
-      // Method to check health of the connection
-      async ping() {
-        try {
-          return await redisClient.ping();
-        } catch (error) {
-          logger.error('Redis ping failed', { error: error.message });
-          return false;
-        }
-      }
-    };
+    
+    // Set key prefix for cache keys
+    redisClient.options.keyPrefix = 'cache:';
     
     logger.info('Redis cache service initialized successfully');
   } catch (error) {
@@ -383,6 +339,5 @@ module.exports = {
   getOrSet,
   clear,
   getStats,
-  cachedAIResponse,
-  redisConnectionPool: () => redisConnectionPool
+  cachedAIResponse
 };

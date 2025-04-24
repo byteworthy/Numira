@@ -63,6 +63,13 @@ const initializeRedisServices = async () => {
       cacheAvailable: cacheService.isRedisAvailable(),
       rateLimiterAvailable: rateLimiter.isRedisAvailable()
     });
+    
+    // If any service is using fallback mode, log a notice
+    if (!queueService.isRedisAvailable() || 
+        !cacheService.isRedisAvailable() || 
+        !rateLimiter.isRedisAvailable()) {
+      logger.info('Some Redis services are running in fallback mode (Replit compatibility)');
+    }
   } catch (error) {
     logger.error('Error initializing Redis services', { error: error.message });
   }
@@ -231,7 +238,7 @@ if (queueService.isRedisAvailable()) {
   queueService.setupBullBoard(app);
   logger.info('Bull Board UI initialized at /admin/queues');
 } else {
-  logger.warn('Bull Board UI skipped - Redis not available');
+  logger.warn('Bull Board UI skipped - Redis not available (using in-memory queue fallback)');
 }
 
 // Serve static assets in production
