@@ -5,7 +5,7 @@
  * It can be run manually when needed.
  * 
  * Usage: node scripts/restore.js [backup-file]
- * Example: node scripts/restore.js backups/numira_backup_2025-04-23_14-30-00.sql.gz
+ * Example: node scripts/restore.js backups/database/db_2025-04-23_14-30-00.sql.gz
  */
 
 const { exec } = require('child_process');
@@ -19,28 +19,33 @@ const zlib = require('zlib');
 const { pipeline } = require('stream');
 const pipelinePromise = util.promisify(pipeline);
 const readline = require('readline');
+const backupService = require('../services/backupService');
+const auditLogger = require('../utils/backupAuditLogger');
 
-// Backup directory
-const BACKUP_DIR = path.join(__dirname, '../backups');
+// Backup directories
+const DB_BACKUP_DIR = path.join(__dirname, '../backups/database');
 
 /**
- * List available backups
+ * List available database backups
  * 
- * @returns {Array} Array of backup files with metadata
+ * @returns {Promise<Array>} Array of backup files with metadata
  */
 async function listBackups() {
   try {
+    // Initialize backup service
+    await backupService.initialize();
+    
     // Ensure backup directory exists
-    if (!fs.existsSync(BACKUP_DIR)) {
-      console.log('No backups directory found.');
+    if (!fs.existsSync(DB_BACKUP_DIR)) {
+      console.log('No database backups directory found.');
       return [];
     }
     
     // Get all backup files
-    const files = fs.readdirSync(BACKUP_DIR)
+    const files = fs.readdirSync(DB_BACKUP_DIR)
       .filter(file => file.endsWith('.sql.gz'))
       .map(file => {
-        const filePath = path.join(BACKUP_DIR, file);
+        const filePath = path.join(DB_BACKUP_DIR, file);
         const stats = fs.statSync(filePath);
         
         return {
@@ -63,9 +68,10 @@ async function listBackups() {
  * Restore database from backup file
  * 
  * @param {string} backupFile - Path to backup file
- * @returns {Object} Result of restore operation
+ * @param {string} userId - ID of the user performing the restore (for audit logging)
+ * @returns {Promise<Object>} Result of restore operation
  */
-async function restoreDatabase(backupFile) {
+async function restoreDatabase(backupFile, userId = 'system-restore') {
   try {
     // Check if backup file exists
     if (!fs.existsSync(backupFile)) {
@@ -121,6 +127,16 @@ async function restoreDatabase(backupFile) {
     
     console.log('Database restore completed successfully.');
     
+    // Log the restore operation to the audit log
+    await auditLogger.logRestoreOperation({
+      backupFile,
+      userId,
+      metadata: {
+        database,
+        timestamp: new Date().toISOString()
+      }
+    });
+    
     return {
       success: true,
       message: 'Database restore completed successfully',
@@ -162,13 +178,16 @@ function confirmRestore() {
  */
 async function main() {
   try {
+    // Initialize audit logger
+    await auditLogger.initialize();
+    
     // Check if backup file is provided as argument
     const backupFile = process.argv[2];
     
     if (backupFile) {
       // Resolve path if provided
       const resolvedPath = path.resolve(backupFile);
-      await restoreDatabase(resolvedPath);
+      await restoreDatabase(resolvedPath, 'system-cli');
     } else {
       // List available backups
       const backups = await listBackups();
@@ -200,7 +219,7 @@ async function main() {
         }
         
         const selectedBackup = backups[selection - 1];
-        await restoreDatabase(selectedBackup.path);
+        await restoreDatabase(selectedBackup.path, 'system-interactive');
       });
     }
   } catch (error) {

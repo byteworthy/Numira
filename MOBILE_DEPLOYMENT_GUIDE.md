@@ -1,260 +1,154 @@
-# Numira Mobile Deployment Guide
+# Mobile Deployment Guide
 
-This guide provides instructions for deploying the Numira mental clarity app as a native mobile application using CapacitorJS.
+This guide provides instructions for deploying the Numira backend API to support mobile applications (iOS and Android).
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Environment Setup](#environment-setup)
+3. [Deployment Options](#deployment-options)
+4. [API Configuration for Mobile](#api-configuration-for-mobile)
+5. [Security Considerations](#security-considerations)
+6. [Monitoring and Scaling](#monitoring-and-scaling)
+7. [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
-- Node.js (v14 or higher)
-- npm or yarn
+- Node.js 16.x or higher
+- PostgreSQL 14.x or higher
 - Git
-- Android Studio (for Android builds)
-- Xcode (for iOS builds, macOS only)
-- Apple Developer Account (for iOS deployment)
-- Google Play Developer Account (for Android deployment)
+- Docker (optional, for containerized deployment)
+- A Render.com, Heroku, or similar cloud platform account
 
-## Getting Started
+## Environment Setup
 
-### 1. Clone the Repository
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/numira.git
+   cd numira
+   ```
 
-```bash
-git clone https://github.com/yourusername/numira.git
-cd numira
-```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-### 2. Install Dependencies
+3. Create a `.env` file based on `.env.sample`:
+   ```bash
+   cp .env.sample .env
+   ```
 
-Install server dependencies:
-```bash
-npm install
-```
+4. Update the `.env` file with your configuration values, especially:
+   - Database connection details
+   - JWT secret
+   - OpenAI API key
+   - CORS settings (set to your mobile app's domain or '*' for development)
 
-Install client dependencies:
-```bash
-cd client
-npm install
-cd ..
-```
+## Deployment Options
 
-### 3. Configure Environment Variables
+### Option 1: Render.com (Recommended)
 
-Create a `.env` file in the root directory with the following variables:
-```
-NODE_ENV=production
-PORT=5000
-MONGO_URI=your_mongodb_connection_string
-JWT_SECRET=your_jwt_secret
-OPENAI_API_KEY=your_openai_api_key
-```
+1. Create a new Web Service on Render.com
+2. Connect your GitHub repository
+3. Configure the service:
+   - Environment: Node
+   - Build Command: `npm install && npm run build`
+   - Start Command: `npm start`
+   - Add all environment variables from your `.env` file
 
-### 4. Build the React Application
+### Option 2: Docker Deployment
 
-```bash
-cd client
-npm run build
-cd ..
-```
+1. Build the Docker image:
+   ```bash
+   docker build -t numira-api .
+   ```
 
-## Setting Up CapacitorJS
+2. Run the container:
+   ```bash
+   docker run -p 8080:8080 --env-file .env numira-api
+   ```
 
-### 1. Initialize Capacitor
+### Option 3: Traditional Hosting
 
-```bash
-cd client
-npm run cap:init
-```
+1. Set up a Node.js environment on your server
+2. Clone the repository and install dependencies
+3. Set up environment variables
+4. Use PM2 or similar process manager:
+   ```bash
+   npm install -g pm2
+   pm2 start server.js
+   ```
 
-This will create the necessary configuration files for Capacitor.
+## API Configuration for Mobile
 
-### 2. Add Platforms
+The API has been optimized for mobile with:
 
-For Android:
-```bash
-npm run cap:add:android
-```
+- JWT authentication supporting Bearer token format
+- Standardized JSON responses
+- Proper error handling
+- Compression for reduced data transfer
+- Health check endpoints for monitoring
+- Rate limiting to prevent abuse
 
-For iOS (macOS only):
-```bash
-npm run cap:add:ios
-```
+### Testing Mobile Connectivity
 
-### 3. Update Capacitor Configuration
+1. Deploy the API to your chosen platform
+2. Use the health check endpoint to verify the API is running:
+   ```
+   GET https://your-api-url.com/api/health
+   ```
+3. Test authentication:
+   ```
+   POST https://your-api-url.com/api/auth
+   Content-Type: application/json
+   
+   {
+     "email": "user@example.com",
+     "password": "password123"
+   }
+   ```
+4. Use the returned token in subsequent requests:
+   ```
+   GET https://your-api-url.com/api/conversations
+   Authorization: Bearer your_token_here
+   ```
 
-The `capacitor.config.ts` file should already be configured, but you may need to update the server URL to point to your deployed backend:
+## Security Considerations
 
-```typescript
-// client/capacitor.config.ts
-import { CapacitorConfig } from '@capacitor/cli';
+1. **HTTPS**: Ensure your API is served over HTTPS only
+2. **JWT Tokens**: Store securely in your mobile app (use secure storage)
+3. **API Keys**: Never expose API keys in your mobile app; use the backend as a proxy
+4. **Rate Limiting**: The API includes rate limiting to prevent abuse
+5. **Input Validation**: All endpoints validate input data
 
-const config: CapacitorConfig = {
-  appId: 'com.numira.app',
-  appName: 'Numira',
-  webDir: 'build',
-  server: {
-    androidScheme: 'https',
-    // Update this URL to your deployed backend
-    url: 'https://your-replit-url.repl.co',
-    cleartext: true
-  },
-  // ... other configurations
-};
+## Monitoring and Scaling
 
-export default config;
-```
-
-### 4. Sync Web Code with Native Projects
-
-After making changes to your web code or Capacitor configuration:
-
-```bash
-npm run cap:sync
-```
-
-## Building for Android
-
-### 1. Open Android Studio
-
-```bash
-npm run cap:open:android
-```
-
-This will open the Android project in Android Studio.
-
-### 2. Configure App Settings
-
-1. Update the app icon:
-   - Navigate to `android/app/src/main/res`
-   - Replace the mipmap folders with your custom icons
-
-2. Update app information in `android/app/src/main/AndroidManifest.xml`:
-   - Permissions
-   - App name
-   - Other configurations
-
-### 3. Build the App Bundle (.aab)
-
-1. In Android Studio, select `Build > Generate Signed Bundle / APK`
-2. Choose `Android App Bundle`
-3. Create or select a keystore for signing
-4. Fill in the keystore details
-5. Select a destination folder
-6. Click `Finish` to build the app bundle
-
-The resulting `.aab` file can be uploaded to the Google Play Store.
-
-## Building for iOS (macOS only)
-
-### 1. Open Xcode
-
-```bash
-npm run cap:open:ios
-```
-
-This will open the iOS project in Xcode.
-
-### 2. Configure App Settings
-
-1. Update the app icon:
-   - Select `Assets.xcassets` in the Project Navigator
-   - Replace the AppIcon with your custom icons
-
-2. Update app information:
-   - Select the project in the Project Navigator
-   - Update Bundle Identifier, Version, etc.
-
-### 3. Build the App (.ipa)
-
-1. Connect your Apple Developer account in Xcode
-2. Select a development team
-3. Choose a device or simulator for testing
-4. Select `Product > Archive` to create an archive
-5. In the Archives window, click `Distribute App`
-6. Follow the prompts to create an `.ipa` file
-
-The resulting `.ipa` file can be uploaded to the App Store.
-
-## Submitting to App Stores
-
-### Google Play Store
-
-1. Create a new app in the [Google Play Console](https://play.google.com/console)
-2. Fill in the app details, screenshots, and descriptions
-3. Upload the `.aab` file
-4. Set up pricing and distribution
-5. Submit for review
-
-### Apple App Store
-
-1. Create a new app in [App Store Connect](https://appstoreconnect.apple.com)
-2. Fill in the app details, screenshots, and descriptions
-3. Upload the `.ipa` file using Xcode or Application Loader
-4. Set up pricing and distribution
-5. Submit for review
-
-## Additional Mobile-Specific Features
-
-### Splash Screen
-
-The splash screen is configured in `capacitor.config.ts`. You can customize it by:
-
-1. Creating splash screen images in various sizes
-2. Placing them in the appropriate directories:
-   - Android: `android/app/src/main/res/drawable`
-   - iOS: Add to Xcode project
-
-### Offline Mode
-
-Numira includes offline functionality that:
-- Caches conversations for offline viewing
-- Allows users to compose messages while offline
-- Automatically syncs when the device reconnects
-
-### Touch Optimization
-
-The UI has been optimized for touch interactions with:
-- Larger touch targets (minimum 44×44px)
-- Appropriate spacing between interactive elements
-- Mobile-friendly input fields
+1. Use the `/api/health` endpoints to monitor API status
+2. Set up alerts for server errors and high response times
+3. Monitor database performance
+4. Scale horizontally by adding more instances as needed
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Build Errors**:
-   - Ensure all dependencies are installed
-   - Check that the capacitor.config.ts is properly configured
-   - Verify that the webDir points to the correct build directory
+1. **CORS Errors**: Ensure your CORS settings include your mobile app's domain
+2. **Authentication Failures**: Check JWT token expiration and format
+3. **Database Connection Issues**: Verify database credentials and connectivity
+4. **Rate Limiting**: Check if you're hitting rate limits during testing
 
-2. **API Connection Issues**:
-   - Verify the server URL in capacitor.config.ts
-   - Check that CORS is properly configured on the backend
-   - Ensure the device has internet connectivity
+### Debugging
 
-3. **Plugin Issues**:
-   - Run `npm run cap:sync` after installing new Capacitor plugins
-   - Check plugin documentation for platform-specific setup
+1. Check server logs:
+   ```
+   GET https://your-api-url.com/api/health/detailed
+   ```
+2. Enable detailed logging by setting `LOG_LEVEL=debug` in your environment
+3. For local testing, run the server with:
+   ```bash
+   NODE_ENV=development npm run dev
+   ```
 
-### Getting Help
+---
 
-If you encounter issues not covered in this guide:
-- Check the [Capacitor documentation](https://capacitorjs.com/docs)
-- Search for solutions on Stack Overflow
-- File an issue in the project repository
-
-## Maintenance
-
-### Updating the App
-
-1. Make changes to the web application
-2. Rebuild the web app: `npm run build`
-3. Sync with Capacitor: `npm run cap:sync`
-4. Open the native projects and rebuild
-
-### Version Management
-
-When releasing updates:
-1. Update the version number in:
-   - client/package.json
-   - Android: build.gradle
-   - iOS: Info.plist
-2. Create a new build following the steps above
-3. Submit the new version to the app stores
+For additional support, please open an issue on the GitHub repository or contact the development team.

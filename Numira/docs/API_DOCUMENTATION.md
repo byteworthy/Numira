@@ -783,6 +783,83 @@ Authorization: Bearer <token>
 }
 ```
 
+**Error Responses:**
+
+- 400 Bad Request: If the date parameters are invalid
+```json
+{
+  "status": "error",
+  "errors": [
+    {
+      "value": "invalid-date",
+      "msg": "Start date must be a valid ISO 8601 date",
+      "param": "startDate",
+      "location": "query"
+    }
+  ],
+  "message": "Invalid request parameters"
+}
+```
+
+- 401 Unauthorized: If the user is not authenticated
+```json
+{
+  "status": "error",
+  "message": "No authentication token provided"
+}
+```
+
+- 403 Forbidden: If the user does not have admin privileges
+```json
+{
+  "status": "error",
+  "message": "Access denied: Admin role required"
+}
+```
+
+- 500 Internal Server Error: If there's a server error
+```json
+{
+  "status": "error",
+  "message": "Server error while retrieving persona statistics"
+}
+```
+
+**Usage Example:**
+
+```javascript
+// Example: Get persona usage statistics for the last 30 days
+async function getPersonaStats() {
+  const endDate = new Date().toISOString();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 30);
+  
+  try {
+    const response = await fetch(`/api/analytics/personas?startDate=${startDate.toISOString()}&endDate=${endDate}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + userToken
+      }
+    });
+    
+    const result = await response.json();
+    if (result.status === 'success') {
+      // Sort personas by usage count (descending)
+      const sortedPersonas = result.data.sort((a, b) => b.count - a.count);
+      
+      // Display top 3 personas
+      const topPersonas = sortedPersonas.slice(0, 3);
+      console.log('Top 3 personas by usage:');
+      topPersonas.forEach((persona, index) => {
+        console.log(`${index + 1}. ${persona.name}: ${persona.count} interactions`);
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching persona statistics:', error);
+  }
+}
+```
+
 ### GET /api/analytics/rooms
 
 Gets room usage statistics.
@@ -1079,6 +1156,73 @@ Authorization: Bearer <token>
     "deletedAIMetrics": 980
   },
   "message": "Successfully cleaned up analytics data older than 180 days"
+}
+```
+
+**Error Responses:**
+
+- 400 Bad Request: If the retention days parameter is invalid
+```json
+{
+  "status": "error",
+  "errors": [
+    {
+      "value": "10",
+      "msg": "Retention days must be between 30 and 365",
+      "param": "retentionDays",
+      "location": "body"
+    }
+  ],
+  "message": "Invalid request parameters"
+}
+```
+
+- 401 Unauthorized: If the user is not authenticated
+```json
+{
+  "status": "error",
+  "message": "No authentication token provided"
+}
+```
+
+- 403 Forbidden: If the user does not have admin privileges
+```json
+{
+  "status": "error",
+  "message": "Access denied: Admin role required"
+}
+```
+
+- 500 Internal Server Error: If there's a server error during cleanup
+```json
+{
+  "status": "error",
+  "message": "Failed to clean up analytics data: Database connection error"
+}
+```
+
+**Usage Example:**
+
+```javascript
+// Example: Clean up analytics data older than 90 days
+async function cleanupOldAnalyticsData() {
+  try {
+    const response = await fetch('/api/analytics/cleanup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + userToken
+      },
+      body: JSON.stringify({
+        retentionDays: 90
+      })
+    });
+    
+    const result = await response.json();
+    console.log(`Cleanup successful: Deleted ${result.data.deletedAnalytics} analytics records and ${result.data.deletedAIMetrics} AI metrics records`);
+  } catch (error) {
+    console.error('Error cleaning up analytics data:', error);
+  }
 }
 ```
 

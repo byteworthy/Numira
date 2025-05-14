@@ -1,265 +1,364 @@
 /**
- * Unit tests for the Circuit Breaker Service
- * 
- * Tests the functionality of the circuit breaker pattern implementation.
+ * Unit Tests for Circuit Breaker Service
  */
 
 const circuitBreaker = require('../../../services/circuitBreaker');
+const logger = require('../../../utils/logger');
 
-// Mock winston logger
-jest.mock('winston', () => ({
-  createLogger: jest.fn().mockReturnValue({
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn()
-  }),
-  format: {
-    combine: jest.fn(),
-    timestamp: jest.fn(),
-    json: jest.fn()
-  }
-}));
+// Mock dependencies
+jest.mock('../../../utils/logger');
 
 describe('Circuit Breaker Service', () => {
+  const serviceName = 'testService';
+  const options = {
+    failureThreshold: 3,
+    resetTimeout: 10000,
+    fallbackFunction: jest.fn().mockResolvedValue('fallback result')
+  };
+  
+  let testCircuitBreaker;
+  
   beforeEach(() => {
-    // Reset all mocks before each test
     jest.clearAllMocks();
     
-    // Reset the module to clear any cached state
-    jest.resetModules();
+    // Reset circuit breaker state
+    circuitBreaker.resetAll();
+    
+    // Create a new circuit breaker for testing
+    testCircuitBreaker = circuitBreaker.create(serviceName, options);
   });
-  
-  describe('createBreaker', () => {
-    test('should create a new circuit breaker with default options', () => {
-      const breaker = circuitBreaker.createBreaker('test-service');
+
+  describe('create', () => {
+    it('should create a new circuit breaker with default options', () => {
+      const defaultCircuitBreaker = circuitBreaker.create('defaultService');
       
-      expect(breaker).toBeDefined();
-      expect(breaker.execute).toBeDefined();
-      expect(breaker.isOpen).toBeDefined();
-      
-      // Check initial state
-      expect(breaker.isOpen()).toBe(false);
+      expect(defaultCircuitBreaker).toBeDefined();
+      expect(defaultCircuitBreaker.getState()).toBe('CLOSED');
+      expect(defaultCircuitBreaker.getFailureCount()).toBe(0);
     });
-    
-    test('should create a new circuit breaker with custom options', () => {
-      const options = {
-        failureThreshold: 3,
-        resetTimeout: 5000,
-        halfOpenSuccessThreshold: 1
-      };
-      
-      const breaker = circuitBreaker.createBreaker('test-service', options);
-      
-      expect(breaker).toBeDefined();
+
+    it('should create a new circuit breaker with custom options', () => {
+      expect(testCircuitBreaker).toBeDefined();
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(0);
     });
-    
-    test('should return the same breaker instance for the same name', () => {
-      const breaker1 = circuitBreaker.createBreaker('same-service');
-      const breaker2 = circuitBreaker.createBreaker('same-service');
+
+    it('should return existing circuit breaker if already created', () => {
+      const existingCircuitBreaker = circuitBreaker.create(serviceName);
       
-      expect(breaker1).toBe(breaker2);
+      expect(existingCircuitBreaker).toBe(testCircuitBreaker);
     });
   });
-  
+
+  describe('get', () => {
+    it('should get an existing circuit breaker', () => {
+      const retrievedCircuitBreaker = circuitBreaker.get(serviceName);
+      
+      expect(retrievedCircuitBreaker).toBe(testCircuitBreaker);
+    });
+
+    it('should return null if circuit breaker does not exist', () => {
+      const nonExistentCircuitBreaker = circuitBreaker.get('nonExistentService');
+      
+      expect(nonExistentCircuitBreaker).toBeNull();
+    });
+  });
+
   describe('execute', () => {
-    test('should execute function when circuit is closed', async () => {
-      const breaker = circuitBreaker.createBreaker('test-execute');
-      const mockFn = jest.fn().mockResolvedValue('success');
+    it('should execute function when circuit is closed', async () => {
+      const fn = jest.fn().mockResolvedValue('success');
       
-      const result = await breaker.execute(mockFn);
+      const result = await testCircuitBreaker.execute(fn);
       
-      expect(mockFn).toHaveBeenCalled();
       expect(result).toBe('success');
+      expect(fn).toHaveBeenCalled();
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(0);
     });
-    
-    test('should reject when circuit is open', async () => {
-      const breaker = circuitBreaker.createBreaker('test-open', {
-        failureThreshold: 1,
+
+    it('should increment failure count when function fails', async () => {
+      const error = new Error('Test error');
+      const fn = jest.fn().mockRejectedValue(error);
+      
+      await expect(testCircuitBreaker.execute(fn)).rejects.toThrow('Test error');
+      
+      expect(fn).toHaveBeenCalled();
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(1);
+      expect(logger.warn).toHaveBeenCalledWith('Circuit breaker failure', {
+        serviceName,
+        failureCount: 1,
+        error
+      });
+    });
+
+    it('should trip circuit when failure threshold is reached', async () => {
+      const error = new Error('Test error');
+      const fn = jest.fn().mockRejectedValue(error);
+      
+      // First failure
+      await expect(testCircuitBreaker.execute(fn)).rejects.toThrow('Test error');
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(1);
+      
+      // Second failure
+      await expect(testCircuitBreaker.execute(fn)).rejects.toThrow('Test error');
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(2);
+      
+      // Third failure - should trip circuit
+      await expect(testCircuitBreaker.execute(fn)).rejects.toThrow('Test error');
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      expect(testCircuitBreaker.getFailureCount()).toBe(3);
+      expect(logger.error).toHaveBeenCalledWith('Circuit breaker tripped', {
+        serviceName,
+        failureCount: 3,
+        resetTimeout: options.resetTimeout
+      });
+    });
+
+    it('should use fallback function when circuit is open', async () => {
+      // Trip the circuit
+      const error = new Error('Test error');
+      const fn = jest.fn().mockRejectedValue(error);
+      
+      // Manually trip the circuit
+      testCircuitBreaker.trip();
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      
+      // Execute with circuit open
+      const result = await testCircuitBreaker.execute(fn);
+      
+      expect(result).toBe('fallback result');
+      expect(fn).not.toHaveBeenCalled();
+      expect(options.fallbackFunction).toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith('Circuit breaker using fallback', {
+        serviceName
+      });
+    });
+
+    it('should throw CircuitOpenError when circuit is open and no fallback provided', async () => {
+      // Create circuit breaker without fallback
+      const noFallbackCircuitBreaker = circuitBreaker.create('noFallbackService', {
+        failureThreshold: 3,
         resetTimeout: 10000
       });
       
-      // Force the circuit to open
-      const mockError = new Error('Test error');
-      const mockFailFn = jest.fn().mockRejectedValue(mockError);
+      // Trip the circuit
+      noFallbackCircuitBreaker.trip();
+      expect(noFallbackCircuitBreaker.getState()).toBe('OPEN');
       
-      // First call should fail and open the circuit
-      await expect(breaker.execute(mockFailFn)).rejects.toThrow(mockError);
+      // Execute with circuit open
+      const fn = jest.fn().mockResolvedValue('success');
+      await expect(noFallbackCircuitBreaker.execute(fn))
+        .rejects.toThrow('Circuit is OPEN for service: noFallbackService');
       
-      // Second call should be rejected with circuit open error
-      await expect(breaker.execute(() => Promise.resolve('success'))).rejects.toThrow(/circuit.*open/i);
+      expect(fn).not.toHaveBeenCalled();
     });
-    
-    test('should transition to half-open after reset timeout', async () => {
-      jest.useFakeTimers();
+
+    it('should reset failure count on successful execution', async () => {
+      const error = new Error('Test error');
+      const failFn = jest.fn().mockRejectedValue(error);
       
-      const resetTimeout = 1000; // 1 second
-      const breaker = circuitBreaker.createBreaker('test-half-open', {
-        failureThreshold: 1,
-        resetTimeout
-      });
+      // First failure
+      await expect(testCircuitBreaker.execute(failFn)).rejects.toThrow('Test error');
+      expect(testCircuitBreaker.getFailureCount()).toBe(1);
       
-      // Force the circuit to open
-      const mockFailFn = jest.fn().mockRejectedValue(new Error('Test error'));
-      await expect(breaker.execute(mockFailFn)).rejects.toThrow();
+      // Successful execution
+      const successFn = jest.fn().mockResolvedValue('success');
+      const result = await testCircuitBreaker.execute(successFn);
       
-      // Circuit should be open
-      expect(breaker.isOpen()).toBe(true);
-      
-      // Advance time past the reset timeout
-      jest.advanceTimersByTime(resetTimeout + 100);
-      
-      // Next execution should be allowed (half-open state)
-      const mockSuccessFn = jest.fn().mockResolvedValue('success');
-      const result = await breaker.execute(mockSuccessFn);
-      
-      expect(mockSuccessFn).toHaveBeenCalled();
       expect(result).toBe('success');
-      
-      // Circuit should be closed after successful execution in half-open state
-      expect(breaker.isOpen()).toBe(false);
-      
-      jest.useRealTimers();
+      expect(testCircuitBreaker.getFailureCount()).toBe(0);
     });
-    
-    test('should reopen circuit on failure in half-open state', async () => {
+  });
+
+  describe('trip', () => {
+    it('should manually trip the circuit', () => {
+      testCircuitBreaker.trip();
+      
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      expect(logger.warn).toHaveBeenCalledWith('Circuit breaker manually tripped', {
+        serviceName
+      });
+    });
+  });
+
+  describe('reset', () => {
+    it('should manually reset the circuit', () => {
+      // Trip the circuit
+      testCircuitBreaker.trip();
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      
+      // Reset the circuit
+      testCircuitBreaker.reset();
+      
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(testCircuitBreaker.getFailureCount()).toBe(0);
+      expect(logger.info).toHaveBeenCalledWith('Circuit breaker reset', {
+        serviceName
+      });
+    });
+  });
+
+  describe('halfOpen', () => {
+    it('should set circuit to half-open state', () => {
+      testCircuitBreaker.halfOpen();
+      
+      expect(testCircuitBreaker.getState()).toBe('HALF_OPEN');
+      expect(logger.info).toHaveBeenCalledWith('Circuit breaker half-open', {
+        serviceName
+      });
+    });
+
+    it('should allow one test request when in half-open state', async () => {
+      // Set to half-open
+      testCircuitBreaker.halfOpen();
+      
+      // Successful test request
+      const successFn = jest.fn().mockResolvedValue('success');
+      const result = await testCircuitBreaker.execute(successFn);
+      
+      expect(result).toBe('success');
+      expect(successFn).toHaveBeenCalled();
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(logger.info).toHaveBeenCalledWith('Circuit breaker closed after successful test request', {
+        serviceName
+      });
+    });
+
+    it('should trip circuit again if test request fails', async () => {
+      // Set to half-open
+      testCircuitBreaker.halfOpen();
+      
+      // Failed test request
+      const error = new Error('Test error');
+      const failFn = jest.fn().mockRejectedValue(error);
+      
+      await expect(testCircuitBreaker.execute(failFn)).rejects.toThrow('Test error');
+      
+      expect(failFn).toHaveBeenCalled();
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      expect(logger.warn).toHaveBeenCalledWith('Circuit breaker reopened after failed test request', {
+        serviceName,
+        error
+      });
+    });
+  });
+
+  describe('auto reset', () => {
+    it('should automatically reset to half-open after reset timeout', async () => {
       jest.useFakeTimers();
       
-      const resetTimeout = 1000; // 1 second
-      const breaker = circuitBreaker.createBreaker('test-reopen', {
-        failureThreshold: 1,
-        resetTimeout
-      });
+      // Trip the circuit
+      testCircuitBreaker.trip();
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
       
-      // Force the circuit to open
-      const mockFailFn = jest.fn().mockRejectedValue(new Error('Test error'));
-      await expect(breaker.execute(mockFailFn)).rejects.toThrow();
+      // Fast-forward time
+      jest.advanceTimersByTime(options.resetTimeout);
       
-      // Circuit should be open
-      expect(breaker.isOpen()).toBe(true);
+      // Execute pending timers
+      jest.runOnlyPendingTimers();
       
-      // Advance time past the reset timeout
-      jest.advanceTimersByTime(resetTimeout + 100);
-      
-      // Next execution should fail again
-      await expect(breaker.execute(mockFailFn)).rejects.toThrow();
-      
-      // Circuit should be open again
-      expect(breaker.isOpen()).toBe(true);
-      
-      jest.useRealTimers();
-    });
-    
-    test('should require multiple successes in half-open state to close circuit', async () => {
-      jest.useFakeTimers();
-      
-      const resetTimeout = 1000; // 1 second
-      const halfOpenSuccessThreshold = 2;
-      const breaker = circuitBreaker.createBreaker('test-multiple-success', {
-        failureThreshold: 1,
-        resetTimeout,
-        halfOpenSuccessThreshold
-      });
-      
-      // Force the circuit to open
-      const mockFailFn = jest.fn().mockRejectedValue(new Error('Test error'));
-      await expect(breaker.execute(mockFailFn)).rejects.toThrow();
-      
-      // Advance time past the reset timeout
-      jest.advanceTimersByTime(resetTimeout + 100);
-      
-      // First success in half-open state
-      const mockSuccessFn = jest.fn().mockResolvedValue('success');
-      await breaker.execute(mockSuccessFn);
-      
-      // Circuit should still be in half-open state
-      expect(breaker.isOpen()).toBe(false);
-      
-      // Second success in half-open state
-      await breaker.execute(mockSuccessFn);
-      
-      // Circuit should now be closed
-      expect(breaker.isOpen()).toBe(false);
+      expect(testCircuitBreaker.getState()).toBe('HALF_OPEN');
       
       jest.useRealTimers();
     });
   });
-  
-  describe('resetBreaker', () => {
-    test('should reset a specific circuit breaker', () => {
-      const breaker = circuitBreaker.createBreaker('test-reset');
+
+  describe('getStatus', () => {
+    it('should return circuit breaker status', () => {
+      const status = testCircuitBreaker.getStatus();
       
-      // Force the circuit to open
-      const mockFailFn = jest.fn().mockRejectedValue(new Error('Test error'));
-      breaker.onFailure(new Error('Test error'));
-      breaker.onFailure(new Error('Test error'));
-      breaker.onFailure(new Error('Test error'));
-      breaker.onFailure(new Error('Test error'));
-      breaker.onFailure(new Error('Test error'));
-      
-      // Circuit should be open
-      expect(breaker.isOpen()).toBe(true);
-      
-      // Reset the breaker
-      const result = circuitBreaker.resetBreaker('test-reset');
-      
-      // Reset should return true
-      expect(result).toBe(true);
-      
-      // Circuit should be closed
-      expect(breaker.isOpen()).toBe(false);
+      expect(status).toEqual({
+        serviceName,
+        state: 'CLOSED',
+        failureCount: 0,
+        failureThreshold: options.failureThreshold,
+        resetTimeout: options.resetTimeout,
+        lastFailureTime: null,
+        hasFallback: true
+      });
     });
-    
-    test('should return false when resetting non-existent breaker', () => {
-      const result = circuitBreaker.resetBreaker('non-existent');
+
+    it('should include last failure time when failures occur', async () => {
+      const now = new Date();
+      jest.spyOn(global, 'Date').mockImplementation(() => now);
       
-      expect(result).toBe(false);
-    });
-  });
-  
-  describe('resetAllBreakers', () => {
-    test('should reset all circuit breakers', () => {
-      // Create multiple breakers
-      const breaker1 = circuitBreaker.createBreaker('test-reset-all-1');
-      const breaker2 = circuitBreaker.createBreaker('test-reset-all-2');
+      const error = new Error('Test error');
+      const fn = jest.fn().mockRejectedValue(error);
       
-      // Force both circuits to open
-      breaker1.onFailure(new Error('Test error'));
-      breaker1.onFailure(new Error('Test error'));
-      breaker1.onFailure(new Error('Test error'));
-      breaker1.onFailure(new Error('Test error'));
-      breaker1.onFailure(new Error('Test error'));
+      await expect(testCircuitBreaker.execute(fn)).rejects.toThrow('Test error');
       
-      breaker2.onFailure(new Error('Test error'));
-      breaker2.onFailure(new Error('Test error'));
-      breaker2.onFailure(new Error('Test error'));
-      breaker2.onFailure(new Error('Test error'));
-      breaker2.onFailure(new Error('Test error'));
+      const status = testCircuitBreaker.getStatus();
       
-      // Both circuits should be open
-      expect(breaker1.isOpen()).toBe(true);
-      expect(breaker2.isOpen()).toBe(true);
+      expect(status.lastFailureTime).toEqual(now);
       
-      // Reset all breakers
-      circuitBreaker.resetAllBreakers();
-      
-      // Both circuits should be closed
-      expect(breaker1.isOpen()).toBe(false);
-      expect(breaker2.isOpen()).toBe(false);
+      global.Date.mockRestore();
     });
   });
-  
-  describe('getAllBreakers', () => {
-    test('should return status of all circuit breakers', () => {
-      // Create multiple breakers
-      circuitBreaker.createBreaker('test-get-all-1');
-      circuitBreaker.createBreaker('test-get-all-2');
+
+  describe('getAllCircuitBreakers', () => {
+    it('should return all circuit breakers', () => {
+      // Create another circuit breaker
+      circuitBreaker.create('anotherService');
       
-      const status = circuitBreaker.getAllBreakers();
+      const allCircuitBreakers = circuitBreaker.getAllCircuitBreakers();
       
-      expect(status).toBeDefined();
-      expect(status['test-get-all-1']).toBeDefined();
-      expect(status['test-get-all-2']).toBeDefined();
+      expect(Object.keys(allCircuitBreakers)).toEqual([serviceName, 'anotherService']);
+      expect(allCircuitBreakers[serviceName]).toBe(testCircuitBreaker);
+    });
+  });
+
+  describe('getAllStatus', () => {
+    it('should return status of all circuit breakers', () => {
+      // Create another circuit breaker
+      circuitBreaker.create('anotherService');
+      
+      const allStatus = circuitBreaker.getAllStatus();
+      
+      expect(allStatus.length).toBe(2);
+      expect(allStatus[0].serviceName).toBe(serviceName);
+      expect(allStatus[1].serviceName).toBe('anotherService');
+    });
+  });
+
+  describe('resetAll', () => {
+    it('should reset all circuit breakers', () => {
+      // Create another circuit breaker and trip both
+      const anotherCircuitBreaker = circuitBreaker.create('anotherService');
+      testCircuitBreaker.trip();
+      anotherCircuitBreaker.trip();
+      
+      expect(testCircuitBreaker.getState()).toBe('OPEN');
+      expect(anotherCircuitBreaker.getState()).toBe('OPEN');
+      
+      // Reset all
+      circuitBreaker.resetAll();
+      
+      expect(testCircuitBreaker.getState()).toBe('CLOSED');
+      expect(anotherCircuitBreaker.getState()).toBe('CLOSED');
+    });
+  });
+
+  describe('remove', () => {
+    it('should remove a circuit breaker', () => {
+      circuitBreaker.remove(serviceName);
+      
+      expect(circuitBreaker.get(serviceName)).toBeNull();
+    });
+  });
+
+  describe('removeAll', () => {
+    it('should remove all circuit breakers', () => {
+      // Create another circuit breaker
+      circuitBreaker.create('anotherService');
+      
+      circuitBreaker.removeAll();
+      
+      expect(circuitBreaker.get(serviceName)).toBeNull();
+      expect(circuitBreaker.get('anotherService')).toBeNull();
+      expect(Object.keys(circuitBreaker.getAllCircuitBreakers())).toHaveLength(0);
     });
   });
 });

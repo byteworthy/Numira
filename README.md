@@ -21,9 +21,12 @@ Numira is a full-stack web and mobile application designed to help users process
 ### Backend
 - Node.js
 - Express.js
-- MongoDB with Mongoose
-- JWT Authentication
+- PostgreSQL with native driver
+- JWT Authentication with Bearer token support
 - OpenAI API Integration
+- Standardized RESTful API responses
+- Compression for reduced mobile data usage
+- Health check endpoints for monitoring
 
 ### Frontend
 - React
@@ -38,6 +41,9 @@ Numira is a full-stack web and mobile application designed to help users process
 - Native device storage for offline data
 - Touch-optimized UI components
 - Splash screen and status bar integration
+- Optimized API communication for mobile networks
+- Bearer token authentication for secure mobile requests
+- Reduced payload sizes for faster mobile performance
 
 ## Project Structure
 
@@ -99,9 +105,10 @@ cd ..
 ```
 NODE_ENV=development
 PORT=5000
-MONGO_URI=your_mongodb_connection_string
+DATABASE_URL=postgres://username:password@localhost:5432/numira
 JWT_SECRET=your_jwt_secret
 OPENAI_API_KEY=your_openai_api_key
+CORS_ORIGIN=http://localhost:3000
 ```
 
 5. Seed the database with initial data (personas)
@@ -119,7 +126,7 @@ This will start both the backend server and the React frontend in development mo
 ## Deployment
 
 ### Web Deployment
-The application is designed to be deployable to Replit and can connect to external APIs via Make.com if needed.
+The application is designed to be deployable to Render.com, Heroku, or similar cloud platforms. A Dockerfile is included for containerized deployment.
 
 ### Mobile Deployment
 For deploying as a native mobile application:

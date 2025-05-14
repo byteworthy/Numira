@@ -1,12 +1,30 @@
+/**
+ * Authentication Middleware
+ * 
+ * Verifies JWT tokens from request headers.
+ * Supports both 'x-auth-token' header and 'Authorization: Bearer' format
+ * for better mobile client compatibility.
+ */
+
 const jwt = require('jsonwebtoken');
 
 module.exports = function(req, res, next) {
-  // Get token from header
-  const token = req.header('x-auth-token');
+  // Get token from header - support both formats
+  let token = req.header('x-auth-token');
+  
+  // Check for Authorization header (Bearer token)
+  const authHeader = req.header('Authorization');
+  if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  }
 
   // Check if no token
   if (!token) {
-    return res.status(401).json({ msg: 'No token, authorization denied' });
+    return res.status(401).json({ 
+      success: false,
+      message: 'Authentication required',
+      errors: [{ msg: 'No authentication token provided' }]
+    });
   }
 
   // Verify token
@@ -16,6 +34,10 @@ module.exports = function(req, res, next) {
     req.user = decoded.user;
     next();
   } catch (err) {
-    res.status(401).json({ msg: 'Token is not valid' });
+    return res.status(401).json({ 
+      success: false,
+      message: 'Authentication failed',
+      errors: [{ msg: 'Invalid or expired token' }]
+    });
   }
 };

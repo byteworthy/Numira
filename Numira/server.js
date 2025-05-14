@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -10,6 +11,7 @@ const logger = require('./utils/logger');
 const queueService = require('./services/queueService');
 const cacheService = require('./services/cacheService');
 const rateLimiter = require('./middleware/advancedRateLimiter');
+const monitoringMiddleware = require('./middleware/monitoringMiddleware');
 const { setupSwagger } = require('./config/swagger');
 const markdownIt = require('markdown-it')();
 const fs = require('fs');
@@ -45,8 +47,8 @@ app.use(express.urlencoded({ extended: true }));
 // Compress responses
 app.use(compression());
 
-// Initialize Redis-dependent services
-const initializeRedisServices = async () => {
+// Initialize Redis-dependent services and monitoring
+const initializeServices = async () => {
   try {
     // Initialize queue service
     await queueService.initializeQueues();
@@ -57,11 +59,15 @@ const initializeRedisServices = async () => {
     // Initialize rate limiter
     await rateLimiter.initializeRedis();
     
-    // Log Redis availability status
-    logger.info('Redis services initialization complete', {
+    // Initialize monitoring service
+    const monitoringInitialized = await monitoringMiddleware.initialize();
+    
+    // Log services availability status
+    logger.info('Services initialization complete', {
       queuesAvailable: queueService.isRedisAvailable(),
       cacheAvailable: cacheService.isRedisAvailable(),
-      rateLimiterAvailable: rateLimiter.isRedisAvailable()
+      rateLimiterAvailable: rateLimiter.isRedisAvailable(),
+      monitoringInitialized
     });
     
     // If any service is using fallback mode, log a notice
@@ -80,6 +86,9 @@ app.use(rateLimiter.standardLimiter);
 
 // Apply abuse detection middleware
 app.use(rateLimiter.abuseDetection());
+
+// Apply monitoring middleware to track all requests
+app.use(monitoringMiddleware.trackRequestMetrics);
 
 // Apply disclaimer middleware to all API responses
 const disclaimerMiddleware = require('./middleware/disclaimer');
@@ -178,14 +187,16 @@ app.get('/terms-of-use', (req, res) => {
 
 // API routes
 app.use(`${config.server.apiPrefix}/users`, require('./routes/api/users'));
-app.use(`${config.server.apiPrefix}/auth`, require('./routes/api/auth'));
+// Track new user registrations
+app.use(`${config.server.apiPrefix}/auth`, [monitoringMiddleware.trackNewUser], require('./routes/api/auth'));
 app.use(`${config.server.apiPrefix}/personas`, require('./routes/api/personas'));
 app.use(`${config.server.apiPrefix}/conversations`, require('./routes/api/conversations'));
 app.use(`${config.server.apiPrefix}/insights`, require('./routes/api/insights'));
 app.use(`${config.server.apiPrefix}/terms`, require('./routes/api/terms'));
 app.use(`${config.server.apiPrefix}/notifications`, require('./routes/api/notifications'));
 app.use(`${config.server.apiPrefix}/payments`, require('./routes/api/payments'));
-app.use(`${config.server.apiPrefix}/ai`, require('./routes/api/ai'));
+// Track AI requests
+app.use(`${config.server.apiPrefix}/ai`, [monitoringMiddleware.trackAIRequest], require('./routes/api/ai'));
 app.use(`${config.server.apiPrefix}/status`, require('./routes/api/status'));
 app.use(`${config.server.apiPrefix}/admin`, require('./routes/api/admin'));
 app.use(`${config.server.apiPrefix}/webhooks`, require('./routes/api/webhooks'));
@@ -199,8 +210,10 @@ app.use(`${config.server.apiPrefix}/health`, require('./routes/api/health'));
 app.use(`${config.server.apiPrefix}/disclaimer`, require('./routes/api/disclaimer'));
 app.use(`${config.server.apiPrefix}/features`, require('./routes/api/features'));
 app.use(`${config.server.apiPrefix}/rooms`, require('./routes/api/rooms'));
-app.use(`${config.server.apiPrefix}/journals`, require('./routes/api/journals'));
-app.use(`${config.server.apiPrefix}/llm`, require('./routes/api/llm'));
+// Track journal entries
+app.use(`${config.server.apiPrefix}/journals`, [monitoringMiddleware.trackJournalEntry], require('./routes/api/journals'));
+// Track LLM requests
+app.use(`${config.server.apiPrefix}/llm`, [monitoringMiddleware.trackAIRequest], require('./routes/api/llm'));
 app.use(`${config.server.apiPrefix}/analytics`, require('./routes/api/analytics'));
 
 // Metrics endpoint (if enabled)
@@ -277,8 +290,8 @@ const PORT = config.server.port;
 const server = app.listen(PORT, async () => {
   logger.info(`Server running in ${config.server.env} mode on port ${PORT}`);
   
-  // Initialize Redis-dependent services
-  await initializeRedisServices();
+  // Initialize services
+  await initializeServices();
   
   // Initialize job processors
   queueService.initProcessors();

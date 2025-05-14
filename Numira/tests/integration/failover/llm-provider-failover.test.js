@@ -1,241 +1,330 @@
 /**
- * Integration tests for LLM provider failover functionality
- * 
- * Tests the ability of the system to gracefully handle LLM provider failures
- * and switch to alternative providers when necessary.
+ * Integration Tests for LLM Provider Failover
  */
 
-const request = require('supertest');
-const app = require('../../../server');
+const aiService = require('../../../services/aiService');
 const llmProviderService = require('../../../services/llmProviderService');
 const circuitBreaker = require('../../../services/circuitBreaker');
-const { generateToken } = require('../../../services/authService');
+const openaiService = require('../../../services/openaiService');
+const logger = require('../../../utils/logger');
+const config = require('../../../config/config');
 
-// Mock user for testing
-const testUser = {
-  id: 'test-user-id',
-  email: 'test@example.com',
-  role: 'admin'
-};
+// Mock dependencies
+jest.mock('../../../services/openaiService');
+jest.mock('../../../services/circuitBreaker');
+jest.mock('../../../utils/logger');
+jest.mock('../../../config/config', () => ({
+  llm: {
+    providers: ['openai', 'anthropic', 'azure'],
+    defaultProvider: 'openai',
+    fallbackProvider: 'azure',
+    cacheResponses: false,
+    cacheTTL: 3600
+  },
+  ai: {
+    maxTokens: 2048,
+    temperature: 0.7,
+    phiDetection: false
+  }
+}));
 
-// Generate a valid JWT for the test user
-const authToken = generateToken(testUser);
-
-describe('LLM Provider Failover', () => {
-  beforeAll(async () => {
-    // Reset all circuit breakers before tests
-    circuitBreaker.resetAllBreakers();
-  });
-
-  afterAll(async () => {
-    // Clean up after tests
-    circuitBreaker.resetAllBreakers();
-  });
-
-  describe('Circuit Breaker Functionality', () => {
-    test('Circuit breaker should open after multiple failures', async () => {
-      // Get the OpenAI circuit breaker
-      const openaiBreaker = circuitBreaker.createBreaker('openai');
-      
-      // Force multiple failures
-      for (let i = 0; i < 5; i++) {
-        try {
-          await openaiBreaker.execute(() => {
-            throw new Error('Simulated OpenAI API failure');
-          });
-        } catch (error) {
-          // Expected error
-        }
+describe('LLM Provider Failover Integration Tests', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    
+    // Reset services
+    aiService.reset();
+    llmProviderService.reset();
+    
+    // Mock openaiService methods
+    openaiService.generateCompletion.mockImplementation(async (prompt, options) => {
+      // Simulate different behavior based on provider
+      if (options && options.provider === 'azure') {
+        return {
+          text: 'Azure response',
+          usage: { total_tokens: 120 },
+          provider: 'azure'
+        };
       }
       
-      // Circuit should now be open
-      expect(openaiBreaker.isOpen()).toBe(true);
-      
-      // Reset for other tests
-      openaiBreaker.reset();
+      return {
+        text: 'OpenAI response',
+        usage: { total_tokens: 100 },
+        provider: 'openai'
+      };
     });
     
-    test('Circuit breaker should reset after manual reset', async () => {
-      // Get the OpenAI circuit breaker
-      const openaiBreaker = circuitBreaker.createBreaker('openai');
-      
-      // Force multiple failures to open the circuit
-      for (let i = 0; i < 5; i++) {
-        try {
-          await openaiBreaker.execute(() => {
-            throw new Error('Simulated OpenAI API failure');
-          });
-        } catch (error) {
-          // Expected error
-        }
-      }
-      
-      // Circuit should now be open
-      expect(openaiBreaker.isOpen()).toBe(true);
-      
-      // Reset the circuit breaker
-      circuitBreaker.resetBreaker('openai');
-      
-      // Circuit should now be closed
-      expect(openaiBreaker.isOpen()).toBe(false);
+    // Mock circuitBreaker methods
+    circuitBreaker.execute.mockImplementation(async (service, fn) => {
+      return fn();
     });
+    
+    circuitBreaker.isOpen.mockResolvedValue(false);
   });
-  
-  describe('LLM Provider API Endpoints', () => {
-    test('GET /api/llm/status should return provider status', async () => {
-      const response = await request(app)
-        .get('/api/llm/status')
-        .set('Authorization', `Bearer ${authToken}`);
+
+  describe('Provider Failover', () => {
+    it('should use primary provider when circuit is closed', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
       
-      expect(response.status).toBe(200);
-      expect(response.body.status).toBe('success');
-      expect(response.body.data).toHaveProperty('providers');
-      expect(response.body.data).toHaveProperty('circuitBreakers');
+      const prompt = 'Test prompt';
+      const result = await aiService.generateResponse(prompt);
+      
+      expect(result).toEqual({
+        text: 'OpenAI response',
+        usage: { total_tokens: 100 },
+        provider: 'openai'
+      });
+      expect(circuitBreaker.isOpen).toHaveBeenCalledWith('llm:openai');
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, {
+        temperature: 0.7,
+        maxTokens: 2048,
+        provider: 'openai'
+      });
     });
-    
-    test('POST /api/llm/reset/:provider should reset specific provider', async () => {
-      // First, force the circuit open
-      const openaiBreaker = circuitBreaker.createBreaker('openai');
-      for (let i = 0; i < 5; i++) {
-        try {
-          await openaiBreaker.execute(() => {
-            throw new Error('Simulated OpenAI API failure');
-          });
-        } catch (error) {
-          // Expected error
-        }
-      }
+
+    it('should use fallback provider when primary provider circuit is open', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
       
-      // Verify circuit is open
-      expect(openaiBreaker.isOpen()).toBe(true);
-      
-      // Reset via API
-      const response = await request(app)
-        .post('/api/llm/reset/openai')
-        .set('Authorization', `Bearer ${authToken}`);
-      
-      expect(response.status).toBe(200);
-      expect(response.body.status).toBe('success');
-      expect(response.body.message).toContain('reset successfully');
-      
-      // Verify circuit is now closed
-      expect(openaiBreaker.isOpen()).toBe(false);
-    });
-    
-    test('POST /api/llm/reset-all should reset all providers', async () => {
-      // Force multiple circuits open
-      const openaiBreaker = circuitBreaker.createBreaker('openai');
-      const anthropicBreaker = circuitBreaker.createBreaker('anthropic');
-      
-      for (let i = 0; i < 5; i++) {
-        try {
-          await openaiBreaker.execute(() => {
-            throw new Error('Simulated OpenAI API failure');
-          });
-        } catch (error) {
-          // Expected error
-        }
-        
-        try {
-          await anthropicBreaker.execute(() => {
-            throw new Error('Simulated Anthropic API failure');
-          });
-        } catch (error) {
-          // Expected error
-        }
-      }
-      
-      // Verify circuits are open
-      expect(openaiBreaker.isOpen()).toBe(true);
-      expect(anthropicBreaker.isOpen()).toBe(true);
-      
-      // Reset all via API
-      const response = await request(app)
-        .post('/api/llm/reset-all')
-        .set('Authorization', `Bearer ${authToken}`);
-      
-      expect(response.status).toBe(200);
-      expect(response.body.status).toBe('success');
-      expect(response.body.message).toContain('All circuit breakers reset successfully');
-      
-      // Verify circuits are now closed
-      expect(openaiBreaker.isOpen()).toBe(false);
-      expect(anthropicBreaker.isOpen()).toBe(false);
-    });
-  });
-  
-  describe('Provider Selection and Failover', () => {
-    test('Should select appropriate model based on input complexity', () => {
-      // Simple input
-      const simpleInput = 'Hello, how are you?';
-      const simpleResult = llmProviderService.selectModel('System prompt', simpleInput);
-      
-      // Complex input
-      const complexInput = 'I need a detailed analysis of the philosophical implications of artificial consciousness, including considerations of qualia, the hard problem of consciousness, and ethical frameworks for determining personhood status of advanced AI systems. Please include references to major thinkers in this field and address counterarguments to the main positions.';
-      const complexResult = llmProviderService.selectModel('System prompt', complexInput);
-      
-      // The complex input should select a more capable model
-      expect(simpleResult).toBeDefined();
-      expect(complexResult).toBeDefined();
-      
-      // We can't make specific assertions about which models are selected
-      // since it depends on the available providers and their configurations,
-      // but we can verify that the function returns a valid selection
-      expect(simpleResult).toHaveProperty('provider');
-      expect(simpleResult).toHaveProperty('model');
-      expect(complexResult).toHaveProperty('provider');
-      expect(complexResult).toHaveProperty('model');
-    });
-    
-    test('Should estimate token count correctly', () => {
-      const text = 'This is a test sentence with approximately 10 tokens.';
-      const count = llmProviderService.estimateTokenCount(text);
-      
-      // Token count should be roughly text.length / 4
-      expect(count).toBeGreaterThan(0);
-      expect(count).toBeLessThan(text.length);
-      
-      // Test empty input
-      expect(llmProviderService.estimateTokenCount('')).toBe(0);
-      expect(llmProviderService.estimateTokenCount(null)).toBe(0);
-      expect(llmProviderService.estimateTokenCount(undefined)).toBe(0);
-    });
-  });
-  
-  describe('AI Chat Endpoint with Failover', () => {
-    // This test requires mocking the LLM provider service
-    // to simulate a failure and test the failover behavior
-    test('AI chat should handle provider failures gracefully', async () => {
-      // Save original implementation
-      const originalGetAIResponse = llmProviderService.getAIResponse;
-      
-      // Mock the getAIResponse method to simulate a failure then success
-      let callCount = 0;
-      llmProviderService.getAIResponse = jest.fn().mockImplementation(async (params) => {
-        callCount++;
-        if (callCount === 1) {
-          throw new Error('Simulated provider failure');
-        }
-        return 'Fallback response from alternative provider';
+      // Mock circuit breaker to show primary provider circuit is open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
       });
       
-      // Make a request to the AI chat endpoint
-      const response = await request(app)
-        .post('/api/ai/chat')
-        .set('Authorization', `Bearer ${authToken}`)
-        .send({
-          userInput: 'Test input for failover',
-          personaId: 'ayla',
-          roomId: 'mirrorRoom'
-        });
+      const prompt = 'Test prompt';
+      const result = await aiService.generateResponse(prompt);
       
-      // Restore original implementation
-      llmProviderService.getAIResponse = originalGetAIResponse;
+      expect(result).toEqual({
+        text: 'Azure response',
+        usage: { total_tokens: 120 },
+        provider: 'azure'
+      });
+      expect(circuitBreaker.isOpen).toHaveBeenCalledWith('llm:openai');
+      expect(logger.warn).toHaveBeenCalledWith('Primary provider circuit open, using fallback', {
+        primaryProvider: 'openai',
+        fallbackProvider: 'azure'
+      });
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, {
+        temperature: 0.7,
+        maxTokens: 2048,
+        provider: 'azure'
+      });
+    });
+
+    it('should open circuit after multiple failures', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
       
-      // The request should still succeed with the fallback
-      expect(response.status).toBe(200);
-      expect(response.body.status).toBe('success');
-      expect(response.body.data).toHaveProperty('response');
+      // Mock circuit breaker to record failures and eventually open circuit
+      let failureCount = 0;
+      circuitBreaker.execute.mockImplementation(async (service, fn, fallback) => {
+        if (service === 'llm:openai' && failureCount < 5) {
+          failureCount++;
+          throw new Error('Service error');
+        }
+        return fn();
+      });
+      
+      // First 5 calls should fail and increment failure count
+      for (let i = 0; i < 5; i++) {
+        try {
+          await aiService.generateResponse('Test prompt');
+        } catch (error) {
+          expect(error.message).toBe('Service error');
+        }
+      }
+      
+      // Mock circuit breaker to show primary provider circuit is now open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
+      });
+      
+      // Next call should use fallback provider
+      const result = await aiService.generateResponse('Test prompt');
+      
+      expect(result).toEqual({
+        text: 'Azure response',
+        usage: { total_tokens: 120 },
+        provider: 'azure'
+      });
+    });
+
+    it('should use specified provider regardless of circuit state for direct provider calls', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
+      
+      // Mock circuit breaker to show all provider circuits are open
+      circuitBreaker.isOpen.mockResolvedValue(true);
+      
+      const prompt = 'Test prompt';
+      const result = await llmProviderService.generateCompletionWithProvider('azure', prompt, {
+        temperature: 0.5
+      });
+      
+      expect(result).toEqual({
+        text: 'Azure response',
+        usage: { total_tokens: 120 },
+        provider: 'azure'
+      });
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, {
+        temperature: 0.5,
+        provider: 'azure'
+      });
+    });
+  });
+
+  describe('Error Handling and Recovery', () => {
+    it('should throw error when both primary and fallback providers fail', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
+      
+      // Mock circuit breaker to show primary provider circuit is open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
+      });
+      
+      // Mock openaiService to fail for all providers
+      openaiService.generateCompletion.mockRejectedValue(new Error('All providers failed'));
+      
+      const prompt = 'Test prompt';
+      
+      await expect(aiService.generateResponse(prompt)).rejects.toThrow('All providers failed');
+      
+      expect(circuitBreaker.isOpen).toHaveBeenCalledWith('llm:openai');
+      expect(logger.warn).toHaveBeenCalledWith('Primary provider circuit open, using fallback', {
+        primaryProvider: 'openai',
+        fallbackProvider: 'azure'
+      });
+      expect(logger.error).toHaveBeenCalledWith('Error generating AI response', {
+        error: expect.any(Error)
+      });
+    });
+
+    it('should recover when circuit closes after timeout', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
+      
+      // First, mock circuit breaker to show primary provider circuit is open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
+      });
+      
+      // First call should use fallback provider
+      let result = await aiService.generateResponse('Test prompt');
+      
+      expect(result).toEqual({
+        text: 'Azure response',
+        usage: { total_tokens: 120 },
+        provider: 'azure'
+      });
+      
+      // Then, mock circuit breaker to show primary provider circuit is closed again
+      circuitBreaker.isOpen.mockResolvedValue(false);
+      
+      // Next call should use primary provider again
+      result = await aiService.generateResponse('Test prompt');
+      
+      expect(result).toEqual({
+        text: 'OpenAI response',
+        usage: { total_tokens: 100 },
+        provider: 'openai'
+      });
+    });
+  });
+
+  describe('Provider Selection', () => {
+    it('should allow changing the primary provider', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
+      
+      // Change primary provider to anthropic
+      llmProviderService.setProvider('anthropic');
+      
+      // Mock anthropic provider response
+      openaiService.generateCompletion.mockImplementation(async (prompt, options) => {
+        if (options && options.provider === 'anthropic') {
+          return {
+            text: 'Anthropic response',
+            usage: { total_tokens: 150 },
+            provider: 'anthropic'
+          };
+        }
+        return {
+          text: 'OpenAI response',
+          usage: { total_tokens: 100 },
+          provider: 'openai'
+        };
+      });
+      
+      const prompt = 'Test prompt';
+      const result = await aiService.generateResponse(prompt);
+      
+      expect(result).toEqual({
+        text: 'Anthropic response',
+        usage: { total_tokens: 150 },
+        provider: 'anthropic'
+      });
+      expect(circuitBreaker.isOpen).toHaveBeenCalledWith('llm:anthropic');
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, {
+        temperature: 0.7,
+        maxTokens: 2048,
+        provider: 'anthropic'
+      });
+    });
+
+    it('should use custom fallback provider when specified', async () => {
+      // Initialize services
+      await aiService.initialize();
+      await llmProviderService.initialize('openai');
+      
+      // Temporarily modify config
+      const originalFallbackProvider = config.llm.fallbackProvider;
+      config.llm.fallbackProvider = 'anthropic';
+      
+      // Mock circuit breaker to show primary provider circuit is open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
+      });
+      
+      // Mock anthropic provider response
+      openaiService.generateCompletion.mockImplementation(async (prompt, options) => {
+        if (options && options.provider === 'anthropic') {
+          return {
+            text: 'Anthropic response',
+            usage: { total_tokens: 150 },
+            provider: 'anthropic'
+          };
+        }
+        return {
+          text: 'OpenAI response',
+          usage: { total_tokens: 100 },
+          provider: 'openai'
+        };
+      });
+      
+      const prompt = 'Test prompt';
+      const result = await aiService.generateResponse(prompt);
+      
+      expect(result).toEqual({
+        text: 'Anthropic response',
+        usage: { total_tokens: 150 },
+        provider: 'anthropic'
+      });
+      expect(logger.warn).toHaveBeenCalledWith('Primary provider circuit open, using fallback', {
+        primaryProvider: 'openai',
+        fallbackProvider: 'anthropic'
+      });
+      
+      // Restore config
+      config.llm.fallbackProvider = originalFallbackProvider;
     });
   });
 });

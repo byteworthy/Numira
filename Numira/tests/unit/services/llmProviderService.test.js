@@ -1,213 +1,304 @@
 /**
- * Unit tests for the LLM Provider Service
- * 
- * Tests the functionality of the LLM provider service with mocked API clients.
+ * Unit Tests for LLM Provider Service
  */
 
 const llmProviderService = require('../../../services/llmProviderService');
+const openaiService = require('../../../services/openaiService');
 const circuitBreaker = require('../../../services/circuitBreaker');
 const cacheService = require('../../../services/cacheService');
+const config = require('../../../config/config');
+const logger = require('../../../utils/logger');
 
 // Mock dependencies
-jest.mock('openai');
-jest.mock('@anthropic-ai/sdk');
+jest.mock('../../../services/openaiService');
 jest.mock('../../../services/circuitBreaker');
 jest.mock('../../../services/cacheService');
-jest.mock('winston', () => ({
-  createLogger: jest.fn().mockReturnValue({
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn()
-  }),
-  format: {
-    combine: jest.fn(),
-    timestamp: jest.fn(),
-    json: jest.fn()
+jest.mock('../../../config/config', () => ({
+  llm: {
+    providers: ['openai', 'anthropic', 'azure'],
+    defaultProvider: 'openai',
+    fallbackProvider: 'azure',
+    cacheResponses: true,
+    cacheTTL: 3600
   }
 }));
+jest.mock('../../../utils/logger');
 
 describe('LLM Provider Service', () => {
-  // Mock OpenAI and Anthropic responses
-  const mockOpenAIResponse = {
-    choices: [{ message: { content: 'OpenAI response' } }],
-    usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 }
-  };
-  
-  const mockAnthropicResponse = {
-    content: [{ text: 'Anthropic response' }]
-  };
-  
-  // Mock circuit breaker
-  const mockBreaker = {
-    execute: jest.fn(),
-    isOpen: jest.fn().mockReturnValue(false)
-  };
-  
   beforeEach(() => {
-    // Clear all mocks before each test
     jest.clearAllMocks();
     
-    // Setup circuit breaker mock
-    circuitBreaker.createBreaker.mockReturnValue(mockBreaker);
+    // Reset service state
+    llmProviderService.reset();
     
-    // Setup cache service mock
-    cacheService.generateCacheKey.mockReturnValue('test-cache-key');
-    cacheService.get.mockResolvedValue(null); // Default to cache miss
-    cacheService.set.mockResolvedValue(true);
+    // Mock openaiService methods
+    openaiService.generateCompletion.mockResolvedValue({
+      text: 'OpenAI response',
+      usage: { total_tokens: 100 }
+    });
     
-    // Reset the module to clear any cached state
-    jest.resetModules();
+    // Mock circuitBreaker methods
+    circuitBreaker.execute.mockImplementation((service, fn) => fn());
+    circuitBreaker.isOpen.mockResolvedValue(false);
+    
+    // Mock cacheService methods
+    cacheService.get.mockResolvedValue(null);
+    cacheService.set.mockResolvedValue('OK');
   });
-  
-  describe('selectModel', () => {
-    test('should select preferred model when available and suitable', () => {
-      const result = llmProviderService.selectModel(
-        'System prompt',
-        'User input',
-        'openai',
-        'gpt-4'
-      );
+
+  describe('initialize', () => {
+    it('should initialize with default provider', async () => {
+      await llmProviderService.initialize();
+      
+      expect(llmProviderService.getProvider()).toBe('openai');
+      expect(logger.info).toHaveBeenCalledWith('LLM provider service initialized', {
+        provider: 'openai',
+        availableProviders: ['openai', 'anthropic', 'azure']
+      });
+    });
+
+    it('should initialize with specified provider', async () => {
+      await llmProviderService.initialize('azure');
+      
+      expect(llmProviderService.getProvider()).toBe('azure');
+      expect(logger.info).toHaveBeenCalledWith('LLM provider service initialized', {
+        provider: 'azure',
+        availableProviders: ['openai', 'anthropic', 'azure']
+      });
+    });
+
+    it('should fall back to default provider if specified provider is invalid', async () => {
+      await llmProviderService.initialize('invalid-provider');
+      
+      expect(llmProviderService.getProvider()).toBe('openai');
+      expect(logger.warn).toHaveBeenCalledWith('Invalid provider specified, using default', {
+        requestedProvider: 'invalid-provider',
+        defaultProvider: 'openai'
+      });
+    });
+
+    it('should not re-initialize if already initialized', async () => {
+      await llmProviderService.initialize('azure');
+      
+      // Clear mocks
+      jest.clearAllMocks();
+      
+      // Initialize again
+      await llmProviderService.initialize('anthropic');
+      
+      // Should not change provider or log
+      expect(llmProviderService.getProvider()).toBe('azure');
+      expect(logger.info).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getProvider', () => {
+    it('should return the current provider', async () => {
+      await llmProviderService.initialize('azure');
+      
+      expect(llmProviderService.getProvider()).toBe('azure');
+    });
+
+    it('should initialize with default provider if not initialized', () => {
+      expect(llmProviderService.getProvider()).toBe('openai');
+    });
+  });
+
+  describe('setProvider', () => {
+    it('should set a valid provider', async () => {
+      await llmProviderService.initialize();
+      
+      const result = llmProviderService.setProvider('anthropic');
+      
+      expect(result).toBe(true);
+      expect(llmProviderService.getProvider()).toBe('anthropic');
+      expect(logger.info).toHaveBeenCalledWith('LLM provider changed', {
+        provider: 'anthropic'
+      });
+    });
+
+    it('should reject an invalid provider', async () => {
+      await llmProviderService.initialize();
+      
+      const result = llmProviderService.setProvider('invalid-provider');
+      
+      expect(result).toBe(false);
+      expect(llmProviderService.getProvider()).toBe('openai'); // Unchanged
+      expect(logger.warn).toHaveBeenCalledWith('Invalid provider specified', {
+        requestedProvider: 'invalid-provider'
+      });
+    });
+  });
+
+  describe('getAvailableProviders', () => {
+    it('should return the list of available providers', () => {
+      expect(llmProviderService.getAvailableProviders()).toEqual(['openai', 'anthropic', 'azure']);
+    });
+  });
+
+  describe('generateCompletion', () => {
+    it('should generate completion using the current provider', async () => {
+      await llmProviderService.initialize('openai');
+      
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
+      
+      const result = await llmProviderService.generateCompletion(prompt, options);
       
       expect(result).toEqual({
-        provider: 'openai',
-        model: 'gpt-4'
+        text: 'OpenAI response',
+        usage: { total_tokens: 100 },
+        provider: 'openai'
       });
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, options);
+      expect(circuitBreaker.execute).toHaveBeenCalled();
     });
-    
-    test('should select appropriate model based on input complexity', () => {
-      // Mock a complex input
-      const complexInput = 'This is a very complex question that requires deep analysis. ' +
-        'It involves multiple considerations and nuanced understanding of the subject matter. ' +
-        'Please provide a detailed explanation with examples and counterexamples. ' +
-        'Additionally, consider the philosophical implications and practical applications.';
+
+    it('should use cache when available', async () => {
+      // Set up cache hit
+      const cachedResponse = {
+        text: 'Cached response',
+        usage: { total_tokens: 50 },
+        provider: 'openai'
+      };
+      cacheService.get.mockResolvedValue(cachedResponse);
       
-      const result = llmProviderService.selectModel('System prompt', complexInput);
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
       
-      // Expect a model capable of high reasoning
-      expect(result.provider).toBeDefined();
-      expect(result.model).toBeDefined();
-    });
-    
-    test('should handle unavailable providers', () => {
-      // Mock no available providers
-      const originalProviders = process.env.OPENAI_API_KEY;
-      delete process.env.OPENAI_API_KEY;
+      const result = await llmProviderService.generateCompletion(prompt, options);
       
-      // This should throw an error
-      expect(() => {
-        llmProviderService.selectModel('System prompt', 'User input');
-      }).toThrow('No LLM providers are available');
-      
-      // Restore environment
-      process.env.OPENAI_API_KEY = originalProviders;
-    });
-  });
-  
-  describe('estimateTokenCount', () => {
-    test('should estimate token count based on text length', () => {
-      const text = 'This is a test sentence with approximately 10 tokens.';
-      const count = llmProviderService.estimateTokenCount(text);
-      
-      // Expect roughly text.length / 4 tokens
-      expect(count).toBeGreaterThan(0);
-      expect(count).toBeLessThan(text.length);
-    });
-    
-    test('should handle empty or null input', () => {
-      expect(llmProviderService.estimateTokenCount('')).toBe(0);
-      expect(llmProviderService.estimateTokenCount(null)).toBe(0);
-      expect(llmProviderService.estimateTokenCount(undefined)).toBe(0);
-    });
-  });
-  
-  describe('getAIResponse', () => {
-    test('should return cached response if available', async () => {
-      // Setup cache hit
-      cacheService.get.mockResolvedValue('Cached response');
-      
-      const response = await llmProviderService.getAIResponse({
-        systemPrompt: 'System prompt',
-        userInput: 'User input'
-      });
-      
-      expect(response).toBe('Cached response');
+      expect(result).toEqual(cachedResponse);
       expect(cacheService.get).toHaveBeenCalled();
+      expect(openaiService.generateCompletion).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith('Cache hit for LLM request', expect.any(Object));
     });
-    
-    test('should call OpenAI API and cache response on cache miss', async () => {
-      // Setup OpenAI mock
-      mockBreaker.execute.mockImplementation(async (fn) => {
-        return mockOpenAIResponse;
-      });
+
+    it('should cache responses when caching is enabled', async () => {
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
       
-      const response = await llmProviderService.getAIResponse({
-        systemPrompt: 'System prompt',
-        userInput: 'User input'
-      });
+      await llmProviderService.generateCompletion(prompt, options);
       
-      expect(response).toBe('OpenAI response');
       expect(cacheService.set).toHaveBeenCalled();
     });
-    
-    test('should handle API errors and try fallback', async () => {
-      // Setup OpenAI mock to fail
-      mockBreaker.execute.mockImplementationOnce(async () => {
-        throw new Error('OpenAI error');
-      });
+
+    it('should not cache responses when caching is disabled', async () => {
+      // Temporarily modify config
+      const originalCacheResponses = config.llm.cacheResponses;
+      config.llm.cacheResponses = false;
       
-      // Setup fallback to succeed
-      mockBreaker.execute.mockImplementationOnce(async () => {
-        return mockAnthropicResponse;
-      });
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
       
-      // Mock Anthropic availability
-      process.env.ANTHROPIC_API_KEY = 'test-key';
+      await llmProviderService.generateCompletion(prompt, options);
       
-      try {
-        const response = await llmProviderService.getAIResponse({
-          systemPrompt: 'System prompt',
-          userInput: 'User input'
-        });
-        
-        // If fallback works, we should get a response
-        expect(response).toBeDefined();
-      } catch (error) {
-        // If no fallback available, we'll get an error
-        expect(error.message).toContain('AI service error');
-      }
+      expect(cacheService.set).not.toHaveBeenCalled();
       
-      // Clean up
-      delete process.env.ANTHROPIC_API_KEY;
+      // Restore config
+      config.llm.cacheResponses = originalCacheResponses;
     });
-    
-    test('should skip cache for streaming responses', async () => {
-      // Setup OpenAI mock
-      mockBreaker.execute.mockImplementation(async (fn) => {
-        return mockOpenAIResponse;
+
+    it('should not cache responses when temperature is high', async () => {
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.9 }; // High temperature = more randomness
+      
+      await llmProviderService.generateCompletion(prompt, options);
+      
+      expect(cacheService.set).not.toHaveBeenCalled();
+    });
+
+    it('should use circuit breaker for provider calls', async () => {
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
+      
+      await llmProviderService.generateCompletion(prompt, options);
+      
+      expect(circuitBreaker.execute).toHaveBeenCalledWith(
+        'llm:openai',
+        expect.any(Function),
+        expect.any(Function)
+      );
+    });
+
+    it('should use fallback provider when primary provider circuit is open', async () => {
+      // Mock circuit breaker to show primary provider circuit is open
+      circuitBreaker.isOpen.mockImplementation(async (service) => {
+        return service === 'llm:openai';
       });
       
-      await llmProviderService.getAIResponse({
-        systemPrompt: 'System prompt',
-        userInput: 'User input',
-        stream: true
-      });
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
       
-      // Should not try to get from cache
-      expect(cacheService.get).not.toHaveBeenCalled();
+      await llmProviderService.generateCompletion(prompt, options);
+      
+      // Should check if primary provider circuit is open
+      expect(circuitBreaker.isOpen).toHaveBeenCalledWith('llm:openai');
+      
+      // Should use fallback provider
+      expect(logger.warn).toHaveBeenCalledWith('Primary provider circuit open, using fallback', {
+        primaryProvider: 'openai',
+        fallbackProvider: 'azure'
+      });
+    });
+
+    it('should handle errors gracefully', async () => {
+      // Mock circuit breaker to throw error
+      circuitBreaker.execute.mockRejectedValue(new Error('Service error'));
+      
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
+      
+      await expect(llmProviderService.generateCompletion(prompt, options)).rejects.toThrow('Service error');
+      
+      expect(logger.error).toHaveBeenCalledWith('Error generating completion', {
+        error: expect.any(Error),
+        provider: 'openai'
+      });
     });
   });
-  
-  describe('getProviderStatus', () => {
-    test('should return status of available providers', () => {
-      const status = llmProviderService.getProviderStatus();
+
+  describe('generateCompletionWithProvider', () => {
+    it('should generate completion with specified provider', async () => {
+      await llmProviderService.initialize('openai');
       
-      expect(status).toBeDefined();
-      expect(typeof status).toBe('object');
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
       
-      // Should have OpenAI status at minimum
-      expect(status.openai).toBeDefined();
-      expect(status.openai.available).toBeDefined();
+      const result = await llmProviderService.generateCompletionWithProvider('azure', prompt, options);
+      
+      expect(result).toEqual({
+        text: 'OpenAI response',
+        usage: { total_tokens: 100 },
+        provider: 'azure'
+      });
+      expect(openaiService.generateCompletion).toHaveBeenCalledWith(prompt, options);
+      expect(circuitBreaker.execute).toHaveBeenCalledWith(
+        'llm:azure',
+        expect.any(Function),
+        expect.any(Function)
+      );
+    });
+
+    it('should reject invalid provider', async () => {
+      const prompt = 'Test prompt';
+      const options = { temperature: 0.7 };
+      
+      await expect(llmProviderService.generateCompletionWithProvider('invalid-provider', prompt, options))
+        .rejects.toThrow('Invalid provider: invalid-provider');
+    });
+  });
+
+  describe('reset', () => {
+    it('should reset the service state', async () => {
+      // First set a non-default provider
+      await llmProviderService.initialize('azure');
+      
+      // Reset
+      llmProviderService.reset();
+      
+      // Should be back to default
+      expect(llmProviderService.getProvider()).toBe('openai');
     });
   });
 });

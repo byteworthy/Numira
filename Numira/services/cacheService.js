@@ -2,51 +2,27 @@
  * Cache Service
  * 
  * Provides caching functionality using Redis for improved performance.
- * Falls back to in-memory cache when Redis is unavailable (Replit compatibility).
+ * Uses FallbackRedisHandler for automatic fallback to in-memory cache when Redis is unavailable.
  * Implements methods for storing, retrieving, and invalidating cached data with TTL support.
  */
 
 const config = require('../config/config');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
-const { checkRedisConnection, createRedisClient } = require('../utils/checkRedis');
+const FallbackRedisHandler = require('./FallbackRedisHandler');
 
-// Flag to track Redis availability
-let redisAvailable = false;
-let redisClient = null;
-
-// In-memory cache as fallback when Redis is unavailable
-const memoryCache = new Map();
-const memoryCacheExpiry = new Map();
+// Create Redis handler with fallback capability
+const redisHandler = new FallbackRedisHandler({
+  serviceName: 'CacheService',
+  devMode: config.server.env !== 'production',
+  redisOptions: {
+    keyPrefix: 'cache:'
+  }
+});
 
 // Initialize Redis client if available
 const initializeRedis = async () => {
-  // Check Redis connection
-  redisAvailable = await checkRedisConnection();
-  
-  if (!redisAvailable) {
-    logger.info('Redis unavailable - using in-memory cache for Replit compatibility');
-    console.log('Cache fallback active: Using in-memory cache system for Replit compatibility');
-    return;
-  }
-  
-  try {
-    // Create Redis client for caching
-    redisClient = createRedisClient();
-    
-    if (!redisClient) {
-      throw new Error('Failed to create Redis client');
-    }
-    
-    // Set key prefix for cache keys
-    redisClient.options.keyPrefix = 'cache:';
-    
-    logger.info('Redis cache service initialized successfully');
-  } catch (error) {
-    redisAvailable = false;
-    logger.error('Failed to initialize Redis cache service', { error: error.message });
-    logger.info('Falling back to in-memory cache');
-  }
+  await redisHandler.initialize();
 };
 
 /**
@@ -84,32 +60,11 @@ async function set(key, value, ttl = 3600) {
   try {
     const serializedValue = JSON.stringify(value);
     
-    if (redisAvailable && redisClient) {
-      if (ttl > 0) {
-        await redisClient.set(key, serializedValue, 'EX', ttl);
-      } else {
-        await redisClient.set(key, serializedValue);
-      }
+    if (ttl > 0) {
+      return await redisHandler.set(key, serializedValue, 'EX', ttl);
     } else {
-      // Use in-memory cache as fallback
-      memoryCache.set(key, serializedValue);
-      
-      if (ttl > 0) {
-        // Set expiry time
-        const expiryTime = Date.now() + (ttl * 1000);
-        memoryCacheExpiry.set(key, expiryTime);
-        
-        // Schedule cleanup for expired items
-        setTimeout(() => {
-          if (memoryCacheExpiry.get(key) <= Date.now()) {
-            memoryCache.delete(key);
-            memoryCacheExpiry.delete(key);
-          }
-        }, ttl * 1000);
-      }
+      return await redisHandler.set(key, serializedValue);
     }
-    
-    return true;
   } catch (error) {
     logger.error('Cache set error', { key, error: error.message });
     return false;
@@ -124,22 +79,7 @@ async function set(key, value, ttl = 3600) {
  */
 async function get(key) {
   try {
-    let value;
-    
-    if (redisAvailable && redisClient) {
-      value = await redisClient.get(key);
-    } else {
-      // Use in-memory cache as fallback
-      value = memoryCache.get(key);
-      
-      // Check if value has expired
-      const expiryTime = memoryCacheExpiry.get(key);
-      if (expiryTime && expiryTime <= Date.now()) {
-        memoryCache.delete(key);
-        memoryCacheExpiry.delete(key);
-        return null;
-      }
-    }
+    const value = await redisHandler.get(key);
     
     if (!value) return null;
     
@@ -158,15 +98,7 @@ async function get(key) {
  */
 async function del(key) {
   try {
-    if (redisAvailable && redisClient) {
-      await redisClient.del(key);
-    } else {
-      // Use in-memory cache as fallback
-      memoryCache.delete(key);
-      memoryCacheExpiry.delete(key);
-    }
-    
-    return true;
+    return await redisHandler.del(key);
   } catch (error) {
     logger.error('Cache delete error', { key, error: error.message });
     return false;
@@ -181,36 +113,7 @@ async function del(key) {
  */
 async function delByPattern(pattern) {
   try {
-    if (redisAvailable && redisClient) {
-      // Get all keys matching the pattern
-      const keys = await redisClient.keys(pattern);
-      
-      if (keys.length > 0) {
-        // Delete all matching keys
-        await redisClient.del(...keys);
-        logger.info(`Deleted ${keys.length} cache keys matching pattern: ${pattern}`);
-      }
-    } else {
-      // Use in-memory cache as fallback
-      // Convert glob pattern to regex
-      const regexPattern = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-      let count = 0;
-      
-      // Iterate through all keys and delete matches
-      for (const key of memoryCache.keys()) {
-        if (regexPattern.test(key)) {
-          memoryCache.delete(key);
-          memoryCacheExpiry.delete(key);
-          count++;
-        }
-      }
-      
-      if (count > 0) {
-        logger.info(`Deleted ${count} in-memory cache keys matching pattern: ${pattern}`);
-      }
-    }
-    
-    return true;
+    return await redisHandler.delByPattern(pattern);
   } catch (error) {
     logger.error('Cache delete by pattern error', { pattern, error: error.message });
     return false;
@@ -256,16 +159,7 @@ async function getOrSet(key, fn, ttl = 3600) {
  */
 async function clear() {
   try {
-    if (redisAvailable && redisClient) {
-      await redisClient.flushdb();
-    } else {
-      // Use in-memory cache as fallback
-      memoryCache.clear();
-      memoryCacheExpiry.clear();
-    }
-    
-    logger.info('Cache cleared');
-    return true;
+    return await redisHandler.clear();
   } catch (error) {
     logger.error('Cache clear error', { error: error.message });
     return false;
@@ -279,23 +173,7 @@ async function clear() {
  */
 async function getStats() {
   try {
-    if (redisAvailable && redisClient) {
-      const info = await redisClient.info();
-      const dbSize = await redisClient.dbsize();
-      
-      return {
-        size: dbSize,
-        info: info,
-        type: 'redis'
-      };
-    } else {
-      // Use in-memory cache as fallback
-      return {
-        size: memoryCache.size,
-        info: 'In-memory cache',
-        type: 'memory'
-      };
-    }
+    return await redisHandler.getStats();
   } catch (error) {
     logger.error('Cache stats error', { error: error.message });
     return { error: error.message };
@@ -325,7 +203,7 @@ async function cachedAIResponse(userInput, personaId, roomId, generateFn) {
 
 // Check if Redis is available
 const isRedisAvailable = () => {
-  return redisAvailable;
+  return redisHandler.isRedisAvailable();
 };
 
 module.exports = {
